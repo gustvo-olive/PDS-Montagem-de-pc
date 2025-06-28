@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import Button from '../components/core/Button';
 import LoadingSpinner from '../components/core/LoadingSpinner';
 
@@ -10,14 +10,14 @@ interface AuthPageProps {
 }
 
 const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
-  const [name, setName] = useState('');
+  const [nome, setNome] = useState(''); // Alterado de name para nome
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const { login, register, isLoading } = useAuth();
-  const navigate = useNavigate();
-
+  // const navigate = useNavigate(); // Não é mais necessário aqui, AuthContext cuida da navegação
+  const location = useLocation(); 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,15 +33,13 @@ const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
         return;
       }
       try {
-        await register(name, email); // Password handling is simplified/mocked
-        // Navigation is handled by AuthContext
+        await register(nome, email, password); // Passa nome, email, password
       } catch (err: any) {
         setError(err.message || 'Falha ao registrar. Tente novamente.');
       }
     } else { // Login
       try {
-        await login(email, password); // Name is not used for login here, email as identifier
-         // Navigation is handled by AuthContext
+        await login(email, password); // Passa email, password
       } catch (err: any) {
         setError(err.message || 'Falha ao fazer login. Verifique suas credenciais.');
       }
@@ -62,17 +60,17 @@ const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
           {mode === 'register' && (
             <div className="rounded-md shadow-sm -space-y-px">
               <div>
-                <label htmlFor="name" className="sr-only">Nome</label>
+                <label htmlFor="nome" className="sr-only">Nome</label> 
                 <input
-                  id="name"
-                  name="name"
+                  id="nome" // Alterado de name para nome
+                  name="nome" // Alterado de name para nome
                   type="text"
                   autoComplete="name"
                   required
                   className="appearance-none rounded-none relative block w-full px-3 py-3 border border-neutral-dark bg-primary placeholder-neutral-dark text-neutral rounded-t-md focus:outline-none focus:ring-accent focus:border-accent focus:z-10 sm:text-sm"
                   placeholder="Nome Completo"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  value={nome} // Alterado de name para nome
+                  onChange={(e) => setNome(e.target.value)} // Alterado de setName para setNome
                 />
               </div>
             </div>
@@ -96,7 +94,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
             <div>
               <label htmlFor="password_login" className="sr-only">Senha</label>
               <input
-                id="password_login"
+                id="password_login" // Mantido id para consistência de CSS se houver
                 name="password"
                 type="password"
                 autoComplete={mode === 'login' ? "current-password" : "new-password"}
@@ -140,14 +138,14 @@ const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
           {mode === 'login' ? (
             <p className="text-neutral-dark">
               Não tem uma conta?{' '}
-              <Link to="/register" className="font-medium text-accent hover:text-opacity-80">
+              <Link to="/register" state={location.state} className="font-medium text-accent hover:text-opacity-80">
                 Cadastre-se
               </Link>
             </p>
           ) : (
             <p className="text-neutral-dark">
               Já tem uma conta?{' '}
-              <Link to="/login" className="font-medium text-accent hover:text-opacity-80">
+              <Link to="/login" state={location.state} className="font-medium text-accent hover:text-opacity-80">
                 Faça login
               </Link>
             </p>

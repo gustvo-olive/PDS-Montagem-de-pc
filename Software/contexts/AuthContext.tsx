@@ -2,86 +2,175 @@
 import React, { createContext, useState, useContext, ReactNode, useCallback, useEffect } from 'react';
 import { User } from '../types';
 import { useNavigate, useLocation } from 'react-router-dom';
-
+import { supabase } from '../services/supabaseClient';
+import { Session, User as SupabaseUser } from '@supabase/supabase-js';
 
 interface AuthContextType {
   currentUser: User | null;
+  session: Session | null;
   isLoading: boolean;
-  login: (name: string, email: string) => Promise<void>; // Simplified login
-  logout: () => void;
-  register: (name: string, email: string) => Promise<void>; // Simplified register
+  login: (email: string, pass: string) => Promise<void>;
+  logout: () => Promise<void>;
+  register: (nome: string, email: string, pass: string) => Promise<void>;
+  updateUser: (updates: { nome?: string; email?: string; password?: string }) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const navigate = useNavigate();
   const location = useLocation();
 
+  const fetchUserProfile = useCallback(async (supabaseUser: SupabaseUser): Promise<User | null> => {
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('nome, email')
+      .eq('id', supabaseUser.id)
+      .single();
 
-  useEffect(() => {
-    try {
-      const storedUser = localStorage.getItem('currentUser');
-      if (storedUser) {
-        setCurrentUser(JSON.parse(storedUser));
-      }
-    } catch (error) {
-      console.error("Failed to load user from localStorage", error);
-      localStorage.removeItem('currentUser');
+    if (error && error.code !== 'PGRST116') { // PGRST116: no rows found
+      console.error("Error fetching user profile:", error);
+      return null;
     }
-    setIsLoading(false);
+    
+    if (profile) {
+      return { id: supabaseUser.id, nome: profile.nome, email: profile.email };
+    }
+    return null;
+
   }, []);
 
-  const login = useCallback(async (name: string, email: string) => {
-    setIsLoading(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 500));
-    const user: User = { id: Date.now().toString(), name, email };
-    setCurrentUser(user);
-    localStorage.setItem('currentUser', JSON.stringify(user));
-    setIsLoading(false);
-    // Redirect to dashboard or intended page
-    const from = (location.state as any)?.from?.pathname || '/dashboard';
-    navigate(from, { replace: true });
-  }, [navigate, location.state]);
+  useEffect(() => {
+    const getInitialSession = async () => {
+      const { data: { session }, error } = await supabase.auth.getSession();
+       if (error) {
+         console.error("Error getting initial session:", error);
+         setIsLoading(false);
+         return;
+       }
 
-  const register = useCallback(async (name: string, email: string) => {
-    setIsLoading(true);
-    // Simulate API call, check for existing user (mock)
-    await new Promise(resolve => setTimeout(resolve, 500));
-    // For MVP, we assume registration is always successful if email is not 'taken@example.com'
-    if (email === 'taken@example.com') {
-        setIsLoading(false);
-        throw new Error("Email já cadastrado.");
+      setSession(session);
+      if (session?.user) {
+        const profile = await fetchUserProfile(session.user);
+        setCurrentUser(profile);
+      }
+      setIsLoading(false);
+    };
+    
+    getInitialSession();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      setSession(session);
+      if (session?.user) {
+        const profile = await fetchUserProfile(session.user);
+        setCurrentUser(profile);
+      } else {
+        setCurrentUser(null);
+      }
+       if (event === 'INITIAL_SESSION') {
+        // already handled by getInitialSession
+      } else {
+         setIsLoading(false);
+      }
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, [fetchUserProfile]);
+
+  const handleAuthSuccessNavigation = () => {
+    const navState = location.state as any;
+    const fromLocation = navState?.from;
+    const originalPath = fromLocation?.pathname || '/dashboard';
+    
+    // Check for pending actions after login
+    if (navState?.pendingAction) {
+       navigate(originalPath, { replace: true, state: { fromLogin: true, action: navState.pendingAction } });
+    } else {
+       navigate(originalPath, { replace: true });
     }
-    const user: User = { id: Date.now().toString(), name, email };
-    setCurrentUser(user);
-    localStorage.setItem('currentUser', JSON.stringify(user));
-    setIsLoading(false);
-    navigate('/dashboard', { replace: true });
-  }, [navigate]);
+  };
 
+  const login = async (email: string, pass: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
+    if (error) throw error;
+    handleAuthSuccessNavigation();
+  };
 
-  const logout = useCallback(() => {
+  const register = async (nome: string, email: string, pass: string) => {
+    const { error } = await supabase.auth.signUp({
+      email,
+      password: pass,
+      options: {
+        data: {
+          nome: nome, // This will be used by the trigger to create the profile
+        },
+      },
+    });
+    if (error) throw error;
+    handleAuthSuccessNavigation();
+  };
+
+  const logout = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+    sessionStorage.removeItem('proceededAnonymously');
+    sessionStorage.removeItem('pendingBuild'); 
+    sessionStorage.removeItem('pendingAiNotes');
     setCurrentUser(null);
-    localStorage.removeItem('currentUser');
+    setSession(null);
     navigate('/');
-  }, [navigate]);
+  };
 
-  return (
-    <AuthContext.Provider value={{ currentUser, isLoading, login, logout, register }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  const updateUser = async (updates: { nome?: string; email?: string; password?: string }) => {
+    if (!currentUser || !session?.user) throw new Error("User not authenticated.");
+
+    const { nome, email, password } = updates;
+    const supabaseUserUpdates: any = {};
+    if (email) supabaseUserUpdates.email = email;
+    if (password) supabaseUserUpdates.password = password;
+
+    // Update auth user if email or password changed
+    if (Object.keys(supabaseUserUpdates).length > 0) {
+      const { error: authError } = await supabase.auth.updateUser(supabaseUserUpdates);
+      if (authError) throw authError;
+    }
+    
+    // Update profiles table if name changed
+    if (nome) {
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ nome })
+        .eq('id', currentUser.id);
+      if (profileError) throw profileError;
+    }
+    
+    // Refetch the user profile to update state
+    const updatedProfile = await fetchUserProfile(session.user);
+    setCurrentUser(updatedProfile);
+  };
+
+  const value: AuthContextType = {
+    currentUser,
+    session,
+    isLoading,
+    login,
+    logout,
+    register,
+    updateUser
+  };
+
+  return <AuthContext.Provider value={value}>{!isLoading && children}</AuthContext.Provider>;
 };
 
 export const useAuth = (): AuthContextType => {
   const context = useContext(AuthContext);
-  if (!context) {
+  if (context === undefined) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
 };
-    
