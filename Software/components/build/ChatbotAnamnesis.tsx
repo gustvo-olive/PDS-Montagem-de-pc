@@ -25,6 +25,10 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete
   const inputRef = useRef<HTMLInputElement>(null);
   const conversationStarted = useRef(false);
 
+  // Use a ref to hold messages to avoid making useCallback dependent on it, breaking the request loop.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
   const [awaitingLocationPermission, setAwaitingLocationPermission] = useState<boolean>(false);
   const [locationProcessed, setLocationProcessed] = useState<boolean>(!!initialAnamnesisData?.ambiente?.cidade);
 
@@ -54,7 +58,8 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete
   const callGeminiChat = useCallback(async (input: string, currentData: PreferenciaUsuarioInput) => {
     setIsLoading(true);
     try {
-      const { aiResponse, updatedPreferencias } = await getChatbotResponse(messages, input, currentData);
+      // Use the ref to get the most up-to-date messages without adding `messages` to dependencies
+      const { aiResponse, updatedPreferencias } = await getChatbotResponse(messagesRef.current, input, currentData);
       processAiResponse(aiResponse, updatedPreferencias);
     } catch (error) {
       console.error("Error in chat:", error);
@@ -62,7 +67,7 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete
     } finally {
       setIsLoading(false);
     }
-  }, [messages, addMessage, processAiResponse]);
+  }, [addMessage, processAiResponse]);
 
 
   useEffect(() => {

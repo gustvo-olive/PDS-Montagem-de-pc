@@ -135,7 +135,9 @@ ${weatherInfoForSystem}
   } catch (error) {
     console.error("Erro ao chamar API Gemini (getChatbotResponse):", error);
     const typedError = error as any;
-    if (typedError?.error?.code === 429 || String(typedError).includes('429')) {
+    const isRateLimitError = (typedError?.error?.code === 429) || (typedError?.code === 429) || String(error).includes('429');
+    
+    if (isRateLimitError) {
       return { 
         aiResponse: "Estou recebendo muitas solicitações no momento. Por favor, aguarde alguns instantes antes de tentar novamente.", 
         updatedPreferencias: currentPreferencias 
@@ -283,14 +285,14 @@ Instruções CRÍTICAS e OBRIGATÓRIAS:
   } catch (error) {
     console.error("Erro ao chamar API Gemini (getBuildRecommendation):", error);
     const typedError = error as any;
-    if (typedError?.error?.code === 429 || String(typedError).includes('429')) {
+    const isRateLimitError = (typedError?.error?.code === 429) || (typedError?.code === 429) || String(error).includes('429');
+
+    if (isRateLimitError) {
         throw new Error("O limite de solicitações da IA foi atingido. Por favor, aguarde um momento e tente gerar a recomendação novamente.");
     }
     
-    // @ts-ignore
-    if (error.response && error.response.text) {
-       // @ts-ignore
-      console.error("Resposta de Erro do Gemini:", await error.response.text());
+    if (typedError.response && typeof typedError.response.text === 'function') {
+      console.error("Resposta de Erro do Gemini:", await typedError.response.text());
     }
     return null;
   }
