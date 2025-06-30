@@ -1,7 +1,6 @@
 
-
 import { GoogleGenAI, GenerateContentResponse, Part, Content } from "@google/genai";
-import { PreferenciaUsuarioInput, ChatMessage, Componente, AIRecommendation, MachineType, PurposeType, GamingType, WorkField, CreativeEditingType, CreativeWorkResolution, ProjectSize, BuildExperience, AestheticsImportance, ServerType, ServerUptime, ServerScalability, EnvTempControlType, CaseSizeType, NoiseLevelType, Ambiente, PerfilPCDetalhado } from '../types';
+import { PreferenciaUsuarioInput, ChatMessage, Componente, AIRecommendation, Ambiente, PerfilPCDetalhado } from '../types';
 
 const API_KEY = process.env.API_KEY;
 
@@ -12,6 +11,12 @@ if (!API_KEY) {
 const ai = new GoogleGenAI({ apiKey: API_KEY || "NO_KEY_PROVIDED" }); 
 const TEXT_MODEL_NAME = 'gemini-2.5-flash-preview-04-17';
 
+// Esta interface define a estrutura JSON esperada da resposta da IA do chatbot.
+interface GeminiChatResponse {
+  aiResponseText: string;
+  updatedPreferencias: PreferenciaUsuarioInput;
+}
+
 const parseJsonFromGeminiResponse = <T,>(responseText: string): T | null => {
   let jsonStr = responseText.trim();
   const fenceRegex = /^```(?:json)?\s*\n?(.*?)\n?\s*```$/s;
@@ -20,7 +25,7 @@ const parseJsonFromGeminiResponse = <T,>(responseText: string): T | null => {
     jsonStr = match[1].trim();
   }
 
-  // Handle cases where the model might add explanatory text before or after the JSON block.
+  // Lida com casos onde o modelo pode adicionar texto explicativo antes ou depois do bloco JSON.
   const firstBrace = jsonStr.indexOf('{');
   const lastBrace = jsonStr.lastIndexOf('}');
   if (firstBrace !== -1 && lastBrace > firstBrace) {
@@ -43,182 +48,89 @@ export const getChatbotResponse = async (
 ): Promise<{ aiResponse: string; updatedPreferencias: PreferenciaUsuarioInput }> => {
   if (!API_KEY) return { aiResponse: "Desculpe, o serviço de IA não está configurado corretamente (sem API Key).", updatedPreferencias: currentPreferencias };
 
+  const isStartingConversation = userInput === 'INICIAR_CONVERSA';
+
   const chatHistoryForGemini: Content[] = history.map(msg => ({
-    role: msg.sender === 'user' ? 'user' : (msg.sender === 'ai' ? 'model' : 'user'),
+    role: msg.sender === 'user' ? 'user' : 'model',
     parts: [{ text: msg.text }],
   }));
 
   let weatherInfoForSystem = "";
-  if (currentPreferencias.ambiente?.cidade && currentPreferencias.ambiente?.temperaturaMaximaCidade !== undefined && currentPreferencias.ambiente?.temperaturaMediaCidade !== undefined && currentPreferencias.ambiente?.temperaturaMinimaCidade !== undefined) {
-    weatherInfoForSystem = `Dados climáticos para ${currentPreferencias.ambiente.cidade}: Temp. Média ${currentPreferencias.ambiente.temperaturaMediaCidade}°C, Máx ${currentPreferencias.ambiente.temperaturaMaximaCidade}°C, Mín ${currentPreferencias.ambiente.temperaturaMinimaCidade}°C. Clima: ${currentPreferencias.ambiente.descricaoClimaCidade || 'N/A'}. Considere isso para refrigeração.`;
-  } else if (currentPreferencias.ambiente?.cidade && currentPreferencias.ambiente?.temperaturaMediaCidade !== undefined) {
-     weatherInfoForSystem = `Dados climáticos para ${currentPreferencias.ambiente.cidade}: Temp. Média ${currentPreferencias.ambiente.temperaturaMediaCidade}°C. Clima: ${currentPreferencias.ambiente.descricaoClimaCidade || 'N/A'}. Considere isso para refrigeração.`;
+  if (currentPreferencias.ambiente?.cidade && currentPreferencias.ambiente?.temperaturaMediaCidade !== undefined) {
+    weatherInfoForSystem = `\nINFORMAÇÃO CLIMÁTICA DISPONÍVEL: Dados para ${currentPreferencias.ambiente.cidade}: Temp. Média ${currentPreferencias.ambiente.temperaturaMediaCidade}°C. Considere isso para refrigeração. O usuário já forneceu a localização.`;
   }
+  
+  const historyTextLower = history.map(h => h.text).join('\n').toLowerCase();
+  const userDeniedLocation = historyTextLower.includes('não permitiu detecção automática');
+  const locationFailed = historyTextLower.includes('não foi possível detectar');
+  const locationAlreadyHandled = !!currentPreferencias.ambiente?.cidade || userDeniedLocation || locationFailed;
 
+  const systemInstruction = `Você é CodeTuga, um assistente especialista em montagem de PCs. Sua tarefa é coletar os requisitos do usuário (PreferenciaUsuarioInput) de forma interativa e retornar um JSON com o estado atualizado e a próxima pergunta.
 
-  const systemInstruction = `Você é CodeTuga, um assistente especializado em montagem de PCs. Siga este fluxo inteligente e conciso para coleta de requisitos.
+**Instruções Principais:**
+1.  Analise o histórico da conversa, a última mensagem do usuário (se houver) e o objeto JSON \`currentPreferencias\` fornecido.
+2.  Extraia TODAS as informações relevantes da última resposta do usuário.
+3.  Atualize o objeto JSON \`currentPreferencias\` para criar o \`updatedPreferencias\`. **NÃO** remova informações já coletadas, apenas adicione ou modifique. Mantenha a estrutura do objeto.
+4.  Siga o "Fluxo de Perguntas" ABAIXO para determinar qual é a próxima pergunta lógica a ser feita. A ordem é CRÍTICA.
+5.  Sua resposta DEVE ser um único bloco de código JSON válido, sem nenhum texto, markdown, ou explicações antes ou depois.
 
-ESTADO ATUAL DA COLETA (PreferenciaUsuarioInput): ${JSON.stringify(currentPreferencias)}
-${weatherInfoForSystem ? `\nINFORMAÇÃO CLIMÁTICA DISPONÍVEL: ${weatherInfoForSystem}` : ''}
+**Fluxo de Perguntas (SIGA ESTA ORDEM EXATAMENTE):**
+*   **SE** \`!orcamento\` e \`!orcamentoRange\`, pergunte: "Para começarmos, qual é a sua faixa de orçamento em Reais (BRL)? (Ex: Econômico [até R$4000], Médio [R$4000-R$8000], ou um valor específico)".
+*   **SENÃO, SE** \`!perfilPC.purpose\`, pergunte: "Ótimo. E qual será o propósito principal do seu PC? (Ex: Jogos, Trabalho/Produtividade, Edição Criativa, Uso Geral)".
+*   **SENÃO, SE** \`perfilPC.purpose === 'Jogos'\` e \`!perfilPC.gamingType\`, pergunte: "Perfeito para jogos! Que tipo de games você mais joga? (Ex: Competitivos/eSports, AAA/High-End, VR, Casual)".
+*   **SENÃO, SE** \`perfilPC.purpose === 'Trabalho/Produtividade'\` e \`!perfilPC.workField\`, pergunte: "Entendido. E em qual área você trabalha? (Ex: Desenvolvimento, Design Gráfico, Engenharia/3D, Ciência de Dados)".
+*   **SENÃO, SE** \`perfilPC.purpose === 'Edição Criativa'\` e \`!perfilPC.creativeEditingType\`, pergunte: "Legal! Qual tipo de edição criativa você faz? (Ex: Vídeo, Foto, Áudio, 3D)".
+*   **SENÃO, SE** ${!locationAlreadyHandled}, pergunte: "Excelente. Para otimizar a refrigeração, você permite que eu detecte sua localização para verificar o clima local? Isso ajuda a escolher o cooler ideal.".
+*   **SENÃO, SE** \`!preferences\`, pergunte: "Estamos quase lá! Você tem alguma outra preferência importante? (Ex: estética com muito RGB, um gabinete pequeno, um sistema super silencioso, marcas preferidas, etc.)".
+*   **SENÃO (TODOS os dados acima coletados)**, use a \`aiResponseText\` para confirmar os dados e perguntar se pode gerar a build. Exemplo: "Ok, revisei tudo: um PC para [Propósito] na faixa de [Orçamento]. Posso gerar uma recomendação de build com base nisso?".
 
-FLUXO DE PERGUNTAS INTELIGENTE E CONCISO:
+**Formato da Saída (JSON OBRIGATÓRIO):**
+\`\`\`json
+{
+  "aiResponseText": "Sua próxima pergunta ou a mensagem de validação final vai aqui.",
+  "updatedPreferencias": {
+    /* A versão MAIS RECENTE e COMPLETA do objeto PreferenciaUsuarioInput vai aqui. */
+  }
+}
+\`\`\`
 
-1.  **Identificação do Tipo de Máquina** (se \`!currentPreferencias.perfilPC.machineType\`):
-    Pergunte: "Que tipo de máquina você deseja montar? (ex: Computador Pessoal para Jogos, Servidor, Estação de Trabalho)"
-
-2.  **Fluxos Específicos por Tipo** (após \`perfilPC.machineType\` ser definido):
-
-    ### Para Computador Pessoal (\`currentPreferencias.perfilPC.machineType === 'Computador Pessoal'\`):
-    a.  **Propósito Principal** (se \`!currentPreferencias.perfilPC.purpose\`):
-        Pergunte: "Qual será o uso principal? (Jogos, Trabalho/Produtividade, Edição Criativa, Uso Geral)"
-    
-    b.  **Sub-fluxos por Propósito** (faça apenas a pergunta mais relevante):
-        - Para **Jogos**: Se \`!currentPreferencias.perfilPC.gamingType\`, pergunte "Que tipo de jogos? (Competitivos/eSports, AAA/High-End)" e se \`!currentPreferencias.perfilPC.monitorSpecs\`, inclua "Qual a resolução e taxa de atualização do seu monitor? (Ex: 1080p/144Hz)".
-        - Para **Trabalho/Produtividade**: Se \`!currentPreferencias.perfilPC.workField\`, pergunte "Qual sua área de trabalho? (Desenvolvimento, Design Gráfico, Engenharia/3D)" e se \`!currentPreferencias.perfilPC.softwareUsed\`, inclua "Quais os softwares mais exigentes que você usa?".
-        - Para **Edição Criativa**: Se \`!currentPreferencias.perfilPC.creativeEditingType\`, pergunte "Qual tipo de edição? (Vídeo, Foto, 3D)" e se \`!currentPreferencias.perfilPC.creativeWorkResolution\`, inclua "Qual a resolução principal de trabalho? (HD, 4K, 8K)".
-
-3.  **Orçamento** (coletar após entender as necessidades principais, se \`!currentPreferencias.orcamento\` e \`!currentPreferencias.orcamentoRange\`):
-    Pergunte: "Qual faixa de orçamento você tem em mente em BRL (Reais)? (Ex: Econômico [até R$4000], Médio [R$4000-R$8000], High-End [R$8000+], ou um valor específico)"
-
-4.  **Permissão de Localização** (após orçamento, se \`!currentPreferencias.ambiente.cidade\` E a pergunta ainda não foi feita):
-    Pergunte EXATAMENTE: "Para ajudar a otimizar a refrigeração, você permite que detectemos sua localização para verificar o clima?"
-
-5.  **Preferências Finais (Opcional)** (após as etapas anteriores):
-    Se os campos críticos estiverem preenchidos e o campo \`preferences\` ainda não foi alterado, pergunte de forma aberta: "Ótimo. Para finalizar, você tem alguma outra preferência importante que eu deva saber? Isso pode incluir estética (como iluminação RGB), tamanho específico do gabinete (compacto, grande), nível de ruído (silencioso), ou necessidade de Wi-Fi/Bluetooth." Se o usuário disser 'não' ou pular, prossiga para a validação.
-
-6.  **Validação Final e Conclusão**:
-    Quando os campos CRÍTICOS (machineType, purpose/workField, orcamento/orcamentoRange) estiverem preenchidos, resuma brevemente:
-    "Ok, coletei as informações principais: [Liste 2-3 pontos chave]. Está tudo correto para eu gerar uma recomendação de build?"
-
-REGRAS DE INTERAÇÃO:
-- Faça UMA pergunta por vez. Seja direto e conciso.
-- EVITE fazer perguntas sobre detalhes que podem ser inferidos (como tamanho do gabinete ou nível de ruído), a menos que o usuário os mencione. Pergunte sobre eles de forma opcional na etapa 5.
-- Se o usuário fornecer múltiplas informações, processe-as e faça a PRÓXIMA pergunta lógica no fluxo.
-- Responda APENAS com sua próxima pergunta ou a validação final.
+**Contexto da Conversa Atual:**
+- Objeto \`currentPreferencias\` atual: ${JSON.stringify(currentPreferencias)}
+${weatherInfoForSystem}
 `;
 
   try {
-    const userMessageContent: Content = { role: 'user', parts: [{ text: userInput }] };
-    const contents: Content[] = [...chatHistoryForGemini, userMessageContent];
+    const userMessageForPrompt = isStartingConversation
+      ? "A conversa está apenas começando. Siga o 'Fluxo de Perguntas' e faça a primeira pergunta ao usuário."
+      : `Última mensagem do usuário: "${userInput}"\n\nCom base no contexto e histórico, gere o JSON de resposta seguindo o fluxo de perguntas.`;
+      
+    const contents: Content[] = [...chatHistoryForGemini, { role: 'user', parts: [{ text: userMessageForPrompt }] }];
     
     const result: GenerateContentResponse = await ai.models.generateContent({
       model: TEXT_MODEL_NAME,
       contents: contents,
       config: {
         systemInstruction: systemInstruction,
+        responseMimeType: "application/json",
       },
     });
     
-    const aiText = result.text;
-    const updatedPreferencias: PreferenciaUsuarioInput = JSON.parse(JSON.stringify(currentPreferencias));
-    if (!updatedPreferencias.perfilPC) updatedPreferencias.perfilPC = {} as PerfilPCDetalhado;
-    if (!updatedPreferencias.ambiente) updatedPreferencias.ambiente = {} as Ambiente;
+    const parsedResponse = parseJsonFromGeminiResponse<GeminiChatResponse>(result.text);
 
-    const lowerInput = userInput.toLowerCase();
-    
-    let lastAiQuestionText = "";
-    for (let i = history.length - 1; i >= 0; i--) {
-        if (history[i].sender === 'ai') {
-            lastAiQuestionText = history[i].text.toLowerCase();
-            break;
-        }
-    }
-    
-    const parseGenericOptions = (input: string, options: Record<string, string>): string | undefined => {
-      for (const [key, value] of Object.entries(options)) {
-        if (input.includes(key)) return value;
-      }
-      return undefined;
-    };
-
-    if (lastAiQuestionText.includes("que tipo de máquina")) {
-        const typeMap: Record<string, MachineType> = {
-            'servidor': 'Servidor', 'server': 'Servidor',
-            'workstation': 'Estação de Trabalho', 'trabalho pesado': 'Estação de Trabalho',
-            'mineração': 'Máquina para Mineração', 'minerar': 'Máquina para Mineração',
-            'pessoal': 'Computador Pessoal', 'pc': 'Computador Pessoal', 'desktop': 'Computador Pessoal',
-            'streaming': 'PC para Streaming', 'streamar': 'PC para Streaming',
-        };
-        const purposeMap: Record<string, PurposeType> = {
-            'jogo': 'Jogos', 'jogos': 'Jogos', 'game': 'Jogos',
-            'trabalho': 'Trabalho/Produtividade', 'produtividade': 'Trabalho/Produtividade', 'estudo': 'Trabalho/Produtividade', 'escritório': 'Trabalho/Produtividade',
-            'edição': 'Edição Criativa', 'edicao': 'Edição Criativa', 'editar': 'Edição Criativa', 'design': 'Edição Criativa',
-            'geral': 'Uso Geral', 'básico': 'Uso Geral', 'dia a dia': 'Uso Geral', 'navegar': 'Uso Geral',
-            'htpc': 'HTPC', 'sala': 'HTPC', 'filmes': 'HTPC', 'mídia': 'HTPC',
-            'outro': 'Outro'
-        };
-
-        const parsedType = parseGenericOptions(lowerInput, typeMap) as MachineType;
-        const parsedPurpose = parseGenericOptions(lowerInput, purposeMap) as PurposeType;
-
-        if (parsedType) {
-            updatedPreferencias.perfilPC.machineType = parsedType;
-        }
-        if (parsedPurpose) {
-            updatedPreferencias.perfilPC.purpose = parsedPurpose;
-            if (!updatedPreferencias.perfilPC.machineType) {
-                updatedPreferencias.perfilPC.machineType = 'Computador Pessoal';
-            }
-        }
-    } else if (lastAiQuestionText.includes("uso principal")) {
-        const purposeMap: Record<string, PurposeType> = {
-            'jogo': 'Jogos', 'jogos': 'Jogos', 'game': 'Jogos',
-            'trabalho': 'Trabalho/Produtividade', 'produtividade': 'Trabalho/Produtividade', 'estudo': 'Trabalho/Produtividade', 'escritório': 'Trabalho/Produtividade',
-            'edição': 'Edição Criativa', 'edicao': 'Edição Criativa', 'editar': 'Edição Criativa',
-            'geral': 'Uso Geral', 'básico': 'Uso Geral', 'dia a dia': 'Uso Geral', 'navegar': 'Uso Geral',
-            'htpc': 'HTPC', 'sala': 'HTPC', 'filmes': 'HTPC', 'mídia': 'HTPC',
-            'outro': 'Outro'
-        };
-        updatedPreferencias.perfilPC.purpose = parseGenericOptions(lowerInput, purposeMap) as PurposeType;
-    } else if (lastAiQuestionText.includes("tipo de jogos")) {
-        const gameTypeMap: Record<string, GamingType> = {
-            'competitivo': 'Competitivos/eSports', 'esports': 'Competitivos/eSports', 'fps': 'Competitivos/eSports', 'valorant': 'Competitivos/eSports', 'cs': 'Competitivos/eSports',
-            'aaa': 'AAA/High-End', 'high-end': 'AAA/High-End', 'lançamentos': 'AAA/High-End', 'single-player': 'AAA/High-End', 'pesados': 'AAA/High-End',
-            'vr': 'VR', 'realidade virtual': 'VR',
-            'casual': 'Casual', 'indie': 'Casual', 'leve': 'Casual',
-            'outro': 'Outro', 'variados': 'Outro', 'todos': 'Outro'
-        };
-        updatedPreferencias.perfilPC.gamingType = parseGenericOptions(lowerInput, gameTypeMap) as GamingType;
-    } else if (lastAiQuestionText.includes("área de trabalho")) {
-        const workFieldMap: Record<string, WorkField> = {
-            'desenvolvimento': 'Desenvolvimento', 'programação': 'Desenvolvimento', 'dev': 'Desenvolvimento',
-            'design': 'Design Gráfico', 'gráfico': 'Design Gráfico',
-            'engenharia': 'Engenharia/3D', '3d': 'Engenharia/3D', 'cad': 'Engenharia/3D', 'arquitetura': 'Engenharia/3D',
-            'escritório': 'Escritório', 'office': 'Escritório',
-            'dados': 'Ciência de Dados', 'data science': 'Ciência de Dados', 'análise': 'Ciência de Dados',
-            'outro': 'Outro',
-        };
-        updatedPreferencias.perfilPC.workField = parseGenericOptions(lowerInput, workFieldMap) as WorkField;
-    } else if (lastAiQuestionText.includes("orçamento")) {
-      const budgetRangesMap: Record<string, { range: PreferenciaUsuarioInput['orcamentoRange'], value?: number }> = {
-          'econômico': { range: 'Econômico [R$2-4k]', value: 3000 }, 
-          'economico': { range: 'Econômico [R$2-4k]', value: 3000 }, 
-          'medio': { range: 'Médio [R$4-8k]', value: 6000 }, 
-          'médio': { range: 'Médio [R$4-8k]', value: 6000 }, 
-          'high-end': { range: 'High-End [R$8k+]', value: 10000 }, 
-          'alto': { range: 'High-End [R$8k+]', value: 10000 }, 
-      };
-      const numMatch = userInput.match(/(\d[\d.,]*\d|\d+)/g);
-      const parsedRange = parseGenericOptions(lowerInput, Object.keys(budgetRangesMap).reduce((acc, key) => ({...acc, [key]: budgetRangesMap[key].range}), {}));
-      
-      if(parsedRange) {
-        updatedPreferencias.orcamentoRange = parsedRange as PreferenciaUsuarioInput['orcamentoRange'];
-        updatedPreferencias.orcamento = budgetRangesMap[Object.keys(budgetRangesMap).find(k => lowerInput.includes(k))!].value;
-      }
-      
-      if (numMatch) {
-          const cleanedNumber = parseFloat(numMatch[0].replace(/\./g, '').replace(',', '.'));
-          if (!isNaN(cleanedNumber)) {
-               updatedPreferencias.orcamento = cleanedNumber;
-               if(!updatedPreferencias.orcamentoRange) updatedPreferencias.orcamentoRange = 'Personalizar'; 
-          }
-      }
-    } else if (lastAiQuestionText.includes("outra preferência")) {
-        if (!updatedPreferencias.preferences) updatedPreferencias.preferences = userInput;
+    if (!parsedResponse || !parsedResponse.aiResponseText || !parsedResponse.updatedPreferencias) {
+        console.error("Resposta da IA está malformada ou incompleta.", result.text);
+        return { aiResponse: "Não entendi bem. Poderia reformular?", updatedPreferencias: currentPreferencias };
     }
 
+    // Garante que a estrutura aninhada exista se a IA a omitir
+    if (!parsedResponse.updatedPreferencias.perfilPC) {
+        parsedResponse.updatedPreferencias.perfilPC = {} as PerfilPCDetalhado;
+    }
+    if (!parsedResponse.updatedPreferencias.ambiente) {
+        parsedResponse.updatedPreferencias.ambiente = {} as Ambiente;
+    }
 
-    return { aiResponse: aiText, updatedPreferencias };
+    return { aiResponse: parsedResponse.aiResponseText, updatedPreferencias: parsedResponse.updatedPreferencias };
 
   } catch (error) {
     console.error("Erro ao chamar API Gemini (getChatbotResponse):", error);
@@ -229,9 +141,10 @@ REGRAS DE INTERAÇÃO:
         updatedPreferencias: currentPreferencias 
       };
     }
-    return { aiResponse: "Desculpe, ocorreu um erro ao processar sua solicitação.", updatedPreferencias: currentPreferencias };
+    return { aiResponse: "Desculpe, ocorreu um erro ao processar sua solicitação. Por favor, tente novamente.", updatedPreferencias: currentPreferencias };
   }
 };
+
 
 export const preFilterComponents = (components: Componente[], budget?: number): Componente[] => {
     const COMPONENT_COUNT_PER_CATEGORY = 15;

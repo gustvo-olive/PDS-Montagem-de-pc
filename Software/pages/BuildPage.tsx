@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { PreferenciaUsuarioInput, Build, Componente, AIRecommendation, Ambiente, PerfilPCDetalhado } from '../types';
@@ -66,39 +67,43 @@ const BuildPage: React.FC = () => {
     }
     
     setIsLoading(true);
-    const buildPayload = {
-        id: buildToSave.id,
-        user_id: currentUser.id,
-        nome: buildToSave.nome,
-        orcamento: buildToSave.orcamento,
-        data_criacao: buildToSave.dataCriacao,
-        requisitos: buildToSave.requisitos as any,
-        avisos_compatibilidade: buildToSave.avisosCompatibilidade,
-    };
-    const { error: buildError } = await supabase.from('builds').upsert(buildPayload);
-    if (buildError) {
-      console.error("Error saving build:", buildError);
-      alert(`Falha ao salvar a build: ${buildError.message}`);
-      setIsLoading(false);
-      return;
-    }
-    const { error: deleteError } = await supabase.from('build_components').delete().eq('build_id', buildToSave.id);
-    if (deleteError) console.error("Error clearing old components:", deleteError);
-    const buildComponentsPayload = buildToSave.componentes.map(comp => ({ build_id: buildToSave.id, component_id: comp.id }));
-    if (buildComponentsPayload.length > 0) {
-      const { error: componentsError } = await supabase.from('build_components').insert(buildComponentsPayload);
-      if (componentsError) {
-        console.error("Error saving build components:", componentsError);
-        alert(`Falha ao salvar os componentes da build: ${componentsError.message}`);
-        setIsLoading(false);
-        return;
-      }
-    }
-    setIsLoading(false);
-    alert(`Build "${buildToSave.nome}" salva com sucesso!`);
-    navigate(`/build/${buildToSave.id}`, { replace: true });
-    setIsViewingSavedBuild(true);
+    try {
+        const buildPayload = {
+            id: buildToSave.id,
+            user_id: currentUser.id,
+            nome: buildToSave.nome,
+            orcamento: buildToSave.orcamento,
+            data_criacao: buildToSave.dataCriacao,
+            requisitos: buildToSave.requisitos as any,
+            avisos_compatibilidade: buildToSave.avisosCompatibilidade,
+        };
+        const { error: buildError } = await supabase.from('builds').upsert(buildPayload);
+        if (buildError) throw buildError;
 
+        const { error: deleteError } = await supabase.from('build_components').delete().eq('build_id', buildToSave.id);
+        if (deleteError) console.error("Error clearing old components:", deleteError);
+        
+        const buildComponentsPayload = buildToSave.componentes.map(comp => ({ build_id: buildToSave.id, component_id: comp.id }));
+        if (buildComponentsPayload.length > 0) {
+            const { error: componentsError } = await supabase.from('build_components').insert(buildComponentsPayload);
+            if (componentsError) throw componentsError;
+        }
+
+        alert(`Build "${buildToSave.nome}" salva com sucesso!`);
+        
+        // Update state locally to avoid re-fetching what we just saved
+        setCurrentBuild(buildToSave);
+        setIsViewingSavedBuild(true);
+        setError(null);
+        navigate(`/build/${buildToSave.id}`, { replace: true });
+
+    } catch (error: any) {
+        console.error("Error saving build:", error);
+        alert(`Falha ao salvar a build: ${error.message}`);
+        setError(`Falha ao salvar a build: ${error.message}`);
+    } finally {
+        setIsLoading(false);
+    }
   }, [currentUser, navigate]);
 
   const executeActualExportBuild = useCallback((buildToExport: Build, notesForExport?: string) => {
@@ -178,18 +183,22 @@ const BuildPage: React.FC = () => {
     }
 
     if (buildId) {
-      if (currentBuild?.id === buildId) return;
+      // If we just saved this build, don't refetch it.
+      if (isViewingSavedBuild && currentBuild?.id === buildId) {
+        return;
+      }
+      
       setIsLoading(true);
       const fetchSavedBuild = async () => {
         const allComponents = await getComponents();
-        if(allComponents.length === 0) {
+        if(!allComponents.length) {
             setError("Falha ao carregar dados de componentes para exibir a build salva.");
             setIsLoading(false);
             return;
         }
         
-        const { data, error } = await supabase.from('builds').select('*, build_components(component_id)').eq('id', buildId).single();
-        if (error) {
+        const { data, error: fetchError } = await supabase.from('builds').select('*, build_components(component_id)').eq('id', buildId).single();
+        if (fetchError) {
           setError(`A build com o ID '${buildId}' não foi encontrada ou você não tem permissão para vê-la.`);
           resetBuildState();
         } else if (data) {
@@ -210,7 +219,7 @@ const BuildPage: React.FC = () => {
       };
       fetchSavedBuild();
     }
-  }, [location.pathname, location.state, currentBuild?.id, resetBuildState, navigate]);
+  }, [location.pathname, location.state, currentBuild?.id, isViewingSavedBuild, resetBuildState, navigate]);
 
   useEffect(() => {
     const pathParts = location.pathname.split('/');

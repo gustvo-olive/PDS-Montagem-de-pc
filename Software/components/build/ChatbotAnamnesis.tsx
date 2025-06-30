@@ -11,9 +11,7 @@ interface ChatbotAnamnesisProps {
   initialAnamnesisData?: PreferenciaUsuarioInput; // Tipo atualizado
 }
 
-const LOCATION_PERMISSION_QUESTION = "você permite que detectemos sua localização";
-const INITIAL_AI_MESSAGE = "Que tipo de máquina você deseja montar? (ex: Computador Pessoal para Jogos, Servidor, Estação de Trabalho)";
-
+const LOCATION_PERMISSION_QUESTION_SUBSTRING = "detecte sua localização";
 
 const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete, initialAnamnesisData }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -25,6 +23,7 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete
   );
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const conversationStarted = useRef(false);
 
   const [awaitingLocationPermission, setAwaitingLocationPermission] = useState<boolean>(false);
   const [locationProcessed, setLocationProcessed] = useState<boolean>(!!initialAnamnesisData?.ambiente?.cidade);
@@ -39,29 +38,20 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete
     setMessages(prev => [...prev, { id: Date.now().toString(), sender, text, timestamp: Date.now() }]);
   }, []);
 
-  useEffect(() => {
-    if (messages.length === 0 && (!initialAnamnesisData || Object.keys(initialAnamnesisData.perfilPC).length === 0 && Object.keys(initialAnamnesisData.ambiente).length === 0 )) {
-       addMessage('ai', "Olá! Sou o CodeTuga, seu assistente especializado em montagem de PCs. Vamos começar!");
-       setTimeout(() => addMessage('ai', INITIAL_AI_MESSAGE), 500);
-    }
-  }, [addMessage, initialAnamnesisData, messages.length]); 
-
-
   const processAiResponse = useCallback((aiResponse: string, updatedPreferenciasFromAI: PreferenciaUsuarioInput) => {
     addMessage('ai', aiResponse);
     setPreferencias(updatedPreferenciasFromAI);
     
     const lowerAiResponse = aiResponse.toLowerCase();
 
-    if (lowerAiResponse.includes(LOCATION_PERMISSION_QUESTION) && !locationProcessed && !updatedPreferenciasFromAI.ambiente.cidade) {
+    if (lowerAiResponse.includes(LOCATION_PERMISSION_QUESTION_SUBSTRING) && !locationProcessed && !updatedPreferenciasFromAI.ambiente.cidade) {
       setAwaitingLocationPermission(true);
     } else if (lowerAiResponse.includes("gerar uma recomendação")) {
       addMessage('system', 'Coleta de requisitos concluída! Clique em "Gerar Recomendação" para continuar.');
     }
   }, [addMessage, locationProcessed]);
 
-
-  const callGeminiChat = async (input: string, currentData: PreferenciaUsuarioInput) => {
+  const callGeminiChat = useCallback(async (input: string, currentData: PreferenciaUsuarioInput) => {
     setIsLoading(true);
     try {
       const { aiResponse, updatedPreferencias } = await getChatbotResponse(messages, input, currentData);
@@ -72,7 +62,19 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [messages, addMessage, processAiResponse]);
+
+
+  useEffect(() => {
+    const isNewConversation = !initialAnamnesisData || (Object.keys(initialAnamnesisData.perfilPC).length === 0 && Object.keys(initialAnamnesisData.ambiente).length === 0);
+
+    if (isNewConversation && !conversationStarted.current) {
+        conversationStarted.current = true;
+        addMessage('ai', "Olá! Sou o CodeTuga, seu assistente especializado em montagem de PCs. Vamos conversar para encontrar a sua build ideal.");
+        callGeminiChat('INICIAR_CONVERSA', preferencias);
+    }
+  }, [addMessage, callGeminiChat, initialAnamnesisData, preferencias]);
+
 
   const handleSendMessage = async (e?: React.FormEvent<HTMLFormElement>) => {
     if (e) e.preventDefault();
@@ -87,7 +89,7 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete
   const isAnamnesisConsideredCompleteByAI = messages.some(
     msg => msg.sender === 'ai' && msg.text.toLowerCase().includes("gerar uma recomendação")
   );
-  const preliminaryCheck = !!(preferencias.perfilPC?.machineType && (preferencias.orcamento || preferencias.orcamentoRange));
+  const preliminaryCheck = !!(preferencias.perfilPC?.purpose && (preferencias.orcamento || preferencias.orcamentoRange));
   const canGenerateRecommendation = isAnamnesisConsideredCompleteByAI && preliminaryCheck;
 
   useEffect(() => {
@@ -129,27 +131,27 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete
 
             const weatherMsg = `Clima em ${loc.city}: ${weather.description}, Temp. Média: ${weather.avgTemp}°C, Máx: ${weather.maxTemp}°C, Mín: ${weather.minTemp}°C.`;
             addMessage('system', weatherMsg);
-            systemMessageForGemini = `Informação do sistema: ${locationMsg} ${weatherMsg} Prossiga com as perguntas sobre o ambiente específico do PC.`;
+            systemMessageForGemini = `Informação do sistema: ${locationMsg} ${weatherMsg} Prossiga com as perguntas.`;
           } else {
             addMessage('system', 'Não foi possível obter dados climáticos para esta localização.');
-            systemMessageForGemini = `Informação do sistema: ${locationMsg} Não foi possível obter dados climáticos. Prossiga com as perguntas sobre o ambiente específico do PC.`;
+            systemMessageForGemini = `Informação do sistema: ${locationMsg} Não foi possível obter dados climáticos. Prossiga com as perguntas.`;
           }
           await callGeminiChat(systemMessageForGemini, currentPrefs);
 
         } else {
           addMessage('system', 'Não foi possível detectar sua localização automaticamente ou dados de coordenadas/cidade não foram retornados.');
-          systemMessageForGemini = "Informação do sistema: Detecção de localização automática falhou. Prossiga para perguntas manuais de ambiente geral.";
+          systemMessageForGemini = "Informação do sistema: Detecção de localização automática falhou. Prossiga para a próxima pergunta.";
           await callGeminiChat(systemMessageForGemini, currentPrefs);
         }
       } catch (error) {
         console.error("Error getting location or weather:", error);
         addMessage('system', 'Erro ao tentar detectar localização ou clima.');
-        systemMessageForGemini = "Informação do sistema: Erro na detecção de localização/clima. Prossiga para perguntas manuais de ambiente geral.";
+        systemMessageForGemini = "Informação do sistema: Erro na detecção de localização/clima. Prossiga para a próxima pergunta.";
         await callGeminiChat(systemMessageForGemini, currentPrefs);
       }
     } else {
-      addMessage('system', 'Você não permitiu a detecção automática. Vamos prosseguir com perguntas manuais sobre o ambiente.');
-      systemMessageForGemini = "Informação do sistema: Usuário não permitiu detecção automática. Prossiga para perguntas manuais de ambiente geral.";
+      addMessage('system', 'Você não permitiu a detecção automática. Vamos prosseguir com as perguntas.');
+      systemMessageForGemini = "Informação do sistema: Usuário não permitiu detecção automática. Prossiga para a próxima pergunta.";
       await callGeminiChat(systemMessageForGemini, currentPrefs);
     }
     setIsLoading(false);
@@ -247,7 +249,7 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete
       {awaitingLocationPermission ? (
         <div className="my-4 p-4 border border-accent rounded-md bg-primary">
           <p className="text-neutral mb-3 text-center">
-            {messages.find(m => m.text.toLowerCase().includes(LOCATION_PERMISSION_QUESTION.toLowerCase()))?.text || "Gostaria de permitir a detecção de localização?"}
+            {messages.find(m => m.text.toLowerCase().includes(LOCATION_PERMISSION_QUESTION_SUBSTRING.toLowerCase()))?.text || "Gostaria de permitir a detecção de localização?"}
           </p>
           <div className="flex flex-col sm:flex-row gap-3">
             <Button onClick={() => handleLocationPermission(true)} variant="primary" isLoading={isLoading} className="flex-1">

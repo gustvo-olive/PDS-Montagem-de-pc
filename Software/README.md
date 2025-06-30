@@ -1,14 +1,28 @@
-# Run and deploy your AI Studio app
+# Execute e faça deploy do seu app AI Studio
 
-This contains everything you need to run your app locally.
+Este guia contém tudo o que você precisa para rodar seu app localmente.
 
-## Run Locally
+## Executar localmente
 
-**Prerequisites:**  Node.js
+**Pré-requisitos:** Node.js
 
+Antes de instalar as dependências, navegue até a raiz do projeto na pasta `Software`:
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```bash
+cd Software
+```
+
+1. Instale as dependências:
+   ```bash
+   npm install
+   npm install --save-dev @types/react @types/react-dom
+   npm install vite --save-dev
+   npm install jspdf
+   ```
+
+2. Defina a variável `GEMINI_API_KEY` no arquivo [.env.local](.env.local) com sua chave da API Gemini.
+
+3. Execute o app:
+   ```bash
+   npm run dev
+   ```
