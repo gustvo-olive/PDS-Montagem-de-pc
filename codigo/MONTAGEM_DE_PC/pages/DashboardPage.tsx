@@ -18,7 +18,7 @@ const SavedBuildCard: React.FC<{ build: Build; onDelete: (buildId: string) => vo
       </div>
       <div className="flex space-x-2 mt-auto">
         <Link to={`/build/${build.id}`}> 
-          <Button size="sm" variant="ghost">Ver/Editar</Button>
+          <Button size="sm" variant="ghost">Visualizar</Button>
         </Link>
         <Button size="sm" variant="danger" onClick={() => onDelete(build.id)}>Excluir</Button>
       </div>

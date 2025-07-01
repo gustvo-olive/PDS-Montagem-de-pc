@@ -25,6 +25,7 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete
   );
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const initialMessagesSent = useRef(false);
 
   const [awaitingLocationPermission, setAwaitingLocationPermission] = useState<boolean>(false);
   const [locationProcessed, setLocationProcessed] = useState<boolean>(!!initialAnamnesisData?.ambiente?.cidade);
@@ -40,9 +41,15 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onAnamnesisComplete
   }, []);
 
   useEffect(() => {
+    if (initialMessagesSent.current) {
+        return;
+    }
     if (messages.length === 0 && (!initialAnamnesisData || Object.keys(initialAnamnesisData.perfilPC).length === 0 && Object.keys(initialAnamnesisData.ambiente).length === 0 )) {
        addMessage('ai', "Olá! Sou o CodeTuga, seu assistente especializado em montagem de PCs. Vamos começar!");
-       setTimeout(() => addMessage('ai', INITIAL_AI_MESSAGE), 500);
+       const timeoutId = setTimeout(() => addMessage('ai', INITIAL_AI_MESSAGE), 500);
+       initialMessagesSent.current = true;
+       
+       return () => clearTimeout(timeoutId);
     }
   }, [addMessage, initialAnamnesisData, messages.length]); 
 

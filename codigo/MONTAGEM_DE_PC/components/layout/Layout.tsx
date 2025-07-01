@@ -14,11 +14,7 @@ const Footer: React.FC = () => {
       <div className="container mx-auto px-6 text-center">
         <p>&copy; {new Date().getFullYear()} CodeTugaBuilds. Todos os direitos reservados.</p>
         <p className="text-sm mt-1">Montador de PCs Inteligente</p>
-        <div className="mt-4">
-          <a href="/docs.html" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline text-sm">
-            Ver Documentação do Projeto
-          </a>
-        </div>
+        
       </div>
     </footer>
   );

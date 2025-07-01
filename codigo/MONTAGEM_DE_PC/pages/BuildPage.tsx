@@ -387,7 +387,7 @@ const BuildPage: React.FC = () => {
             {!pendingActionForAuth && "Você pode iniciar a montagem do seu PC agora. No entanto, para salvar sua build, será necessário fazer login."}
           </p>
           <div className="flex flex-col sm:flex-row gap-3">
-            <Button onClick={handleLoginForBuild} variant="primary" className="flex-1">Fazer Login / Cadastrar</Button>
+            <Button onClick={handleLoginForBuild} variant="primary" className="flex-1">Fazer Login</Button>
             {!pendingActionForAuth && (<Button onClick={handleContinueAnonymously} variant="secondary" className="flex-1">Continuar sem Login</Button>)}
              {pendingActionForAuth && (<Button onClick={() => { setIsAuthInfoModalOpen(false); setPendingActionForAuth(null); } } variant="ghost" className="flex-1">Cancelar Ação</Button>)}
           </div>
