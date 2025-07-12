@@ -7,7 +7,7 @@
  */
 
 import React from 'react';
-import { Build, Componente, PreferenciaUsuarioInput } from '../../types';
+import { Build, Componente, BuildPhase } from '../../types';
 import Button from '../core/Button';
 import Icon from '../core/Icon';
 import LoadingSpinner from '../core/LoadingSpinner';
@@ -19,8 +19,8 @@ import LoadingSpinner from '../core/LoadingSpinner';
 interface BuildSummaryProps {
   /** O objeto da build a ser exibido. Pode ser nulo se nenhuma build foi gerada ainda. */
   build: Build | null;
-  /** `true` se a build está sendo gerada, para exibir um estado de carregamento. */
-  isLoading?: boolean;
+  /** A fase atual do processo de montagem. */
+  phase: BuildPhase;
   /** `true` se a build está sendo salva no momento. */
   isSaving?: boolean;
   /** Callback acionada quando o usuário clica em "Salvar Build". */
@@ -67,62 +67,68 @@ const ComponentItem: React.FC<{ component: Componente }> = ({ component }) => (
  * @param {BuildSummaryProps} props - Propriedades para exibir a build, como o objeto `build`, estados de carregamento e callbacks de ação.
  * @returns {React.ReactElement} A interface de resumo da build.
  */
-const BuildSummary: React.FC<BuildSummaryProps> = ({ build, isLoading, isSaving, onSaveBuild, onExportBuild, aiRecommendationNotes }) => {
-  if (isLoading || !build || build.componentes.length === 0) {
-    return (
-      <div className="bg-secondary p-6 rounded-lg shadow-xl text-center h-full flex flex-col justify-center">
-        {isLoading ? (
-            <LoadingSpinner text="Gerando sua build..." />
-        ) : (
+const BuildSummary: React.FC<BuildSummaryProps> = ({ build, phase, isSaving, onSaveBuild, onExportBuild, aiRecommendationNotes }) => {
+  const renderContent = () => {
+    switch(phase) {
+      case 'anamnesis':
+        return (
+          <>
+            <Icon category="Gabinete" className="w-24 h-24 mx-auto text-neutral-dark opacity-50" />
+            <h3 className="text-xl font-semibold text-neutral-dark mt-4">Sua build aparecerá aqui.</h3>
+            <p className="text-sm text-neutral-dark mt-2">Converse com o assistente para definir seus requisitos.</p>
+          </>
+        );
+      case 'generating':
+        return <LoadingSpinner text="Gerando sua build inicial..." />;
+      case 'editing':
+        if (!build || build.componentes.length === 0) {
+           return <LoadingSpinner text="Atualizando build..." />;
+        }
+        return (
             <>
-                <Icon category="Gabinete" className="w-24 h-24 mx-auto text-neutral-dark opacity-50" />
-                <h3 className="text-xl font-semibold text-neutral-dark mt-4">Sua build aparecerá aqui.</h3>
-                <p className="text-sm text-neutral-dark mt-2">Comece a conversar com nosso assistente para montar seu PC em tempo real.</p>
-            </>
-        )}
-      </div>
-    );
-  }
+              <h3 className="text-2xl font-bold text-accent mb-4 pb-3 border-b border-neutral-dark/30">
+                Sua Build Atual
+              </h3>
+              
+              {aiRecommendationNotes && (
+                <div className="mb-4 p-3 bg-primary/70 border border-accent/30 rounded-lg">
+                  <h4 className="font-semibold text-accent text-sm mb-1">Notas da IA:</h4>
+                  <p className="text-xs text-neutral whitespace-pre-wrap">{aiRecommendationNotes}</p>
+                </div>
+              )}
+
+              <ul className="space-y-2 mb-4 max-h-[50vh] overflow-y-auto pr-2">
+                {build.componentes.map((component) => (
+                  <ComponentItem key={component.id} component={component} />
+                ))}
+              </ul>
+
+              <div className="mt-4 pt-4 border-t border-neutral-dark/30">
+                <div className="flex justify-between items-center mb-4">
+                  <p className="text-xl font-semibold text-neutral">Total Estimado:</p>
+                  <p className="text-2xl font-bold text-accent">R$ {build.orcamento.toFixed(2)}</p>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  {onSaveBuild && (
+                    <Button onClick={() => onSaveBuild(build)} variant="primary" size="md" className="flex-1" isLoading={isSaving}>
+                      Salvar Build
+                    </Button>
+                  )}
+                  {onExportBuild && (
+                    <Button onClick={() => onExportBuild(build)} variant="secondary" size="md" className="flex-1">
+                      Exportar PDF
+                    </Button>
+                  )}
+                </div>
+              </div>
+          </>
+        );
+    }
+  };
   
-  const detailedComponents = build.componentes;
-
   return (
-    <div className="bg-secondary p-4 sm:p-6 rounded-lg shadow-xl">
-      <h3 className="text-2xl font-bold text-accent mb-4 pb-3 border-b border-neutral-dark/30">
-        Sua Build Atual
-      </h3>
-      
-      {aiRecommendationNotes && (
-        <div className="mb-4 p-3 bg-primary/70 border border-accent/30 rounded-lg">
-          <h4 className="font-semibold text-accent text-sm mb-1">Notas da IA:</h4>
-          <p className="text-xs text-neutral whitespace-pre-wrap">{aiRecommendationNotes}</p>
-        </div>
-      )}
-
-      <ul className="space-y-2 mb-4 max-h-[50vh] overflow-y-auto pr-2">
-        {detailedComponents.map((component) => (
-          <ComponentItem key={component.id} component={component} />
-        ))}
-      </ul>
-
-      <div className="mt-4 pt-4 border-t border-neutral-dark/30">
-        <div className="flex justify-between items-center mb-4">
-          <p className="text-xl font-semibold text-neutral">Total Estimado:</p>
-          <p className="text-2xl font-bold text-accent">R$ {build.orcamento.toFixed(2)}</p>
-        </div>
-        <div className="flex flex-col sm:flex-row gap-3">
-          {onSaveBuild && (
-            <Button onClick={() => onSaveBuild(build)} variant="primary" size="md" className="flex-1" isLoading={isSaving}>
-              Salvar Build
-            </Button>
-          )}
-          {onExportBuild && (
-            <Button onClick={() => onExportBuild(build)} variant="secondary" size="md" className="flex-1">
-              Exportar PDF
-            </Button>
-          )}
-        </div>
-      </div>
+    <div className="bg-secondary p-4 sm:p-6 rounded-lg shadow-xl h-full flex flex-col justify-center text-center">
+        {renderContent()}
     </div>
   );
 };

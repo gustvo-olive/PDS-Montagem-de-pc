@@ -8,7 +8,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { PreferenciaUsuarioInput, Build, Componente, AIRecommendation, Ambiente, PerfilPCDetalhado } from '../types';
+import { PreferenciaUsuarioInput, Build, Componente, Ambiente, PerfilPCDetalhado, BuildPhase, ChatMessage } from '../types';
 import ChatbotAnamnesis from '../components/build/ChatbotAnamnesis';
 import BuildSummary from '../components/build/BuildSummary';
 import LoadingSpinner from '../components/core/LoadingSpinner';
@@ -17,6 +17,9 @@ import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/core/Modal';
 import { supabase } from '../services/supabaseClient';
 import { getComponents } from '../services/componentService';
+import { conductAnamnesis, generateOrUpdateBuild } from '../services/geminiService';
+import { getUserLocation, GeoLocation } from '../../services/geoService';
+import { getCityWeather } from '../../services/weatherService';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import toast from 'react-hot-toast';
@@ -42,19 +45,26 @@ export const BuildPage: React.FC = () => {
   const { currentUser } = useAuth();
 
   // Estados principais da página
-  const [preferencias, setPreferencias] = useState<PreferenciaUsuarioInput | null>(null);
+  const [buildPhase, setBuildPhase] = useState<BuildPhase>('anamnesis');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [preferencias, setPreferencias] = useState<PreferenciaUsuarioInput>({ perfilPC: {} as PerfilPCDetalhado, ambiente: {} as Ambiente });
   const [currentBuild, setCurrentBuild] = useState<Build | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(true); // Loading inicial de componentes
+  const [isAiThinking, setIsAiThinking] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [isViewingSavedBuild, setIsViewingSavedBuild] = useState<boolean>(false);
   const [availableComponents, setAvailableComponents] = useState<Componente[] | null>(null);
-  const [pageInitialized, setPageInitialized] = useState<boolean>(false);
+  
+  // Estado para build salva
+  const [isViewingSavedBuild, setIsViewingSavedBuild] = useState<boolean>(false);
 
-  // Estados para gerenciar o fluxo de autenticação para usuários anônimos.
+  // Estados para gerenciar o fluxo de autenticação e permissões.
   const [isAuthInfoModalOpen, setIsAuthInfoModalOpen] = useState<boolean>(false);
   const [pendingActionForAuth, setPendingActionForAuth] = useState<'save' | 'export' | null>(null);
+  const [isAwaitingLocationPermission, setAwaitingLocationPermission] = useState<boolean>(false);
   const hasProceededAnonymously = useRef<boolean>(sessionStorage.getItem(SESSION_PROCEEDED_ANONYMOUSLY_KEY) === 'true');
+
+  const pageInitialized = useRef(false);
 
   // Efeito para carregar a lista de componentes disponíveis na montagem do componente.
   useEffect(() => {
@@ -75,6 +85,18 @@ export const BuildPage: React.FC = () => {
     };
     fetchComponents();
   }, []);
+
+  const addMessage = useCallback((sender: 'user' | 'ai' | 'system', text: string) => {
+    setMessages(prev => [...prev, { id: Date.now().toString() + Math.random(), sender, text, timestamp: Date.now() }]);
+  }, []);
+
+  // Efeito para iniciar a conversa
+  useEffect(() => {
+    if (pageInitialized.current || messages.length > 0 || isViewingSavedBuild || isLoading || !availableComponents) return;
+    
+    addMessage('ai', "Olá! Sou o CodeTuga, seu assistente especializado. Vamos começar a definir os requisitos para o seu novo PC. Qual o seu orçamento?");
+    pageInitialized.current = true;
+  }, [addMessage, messages.length, isViewingSavedBuild, isLoading, availableComponents]);
   
   /**
    * Extrai a string de notas (justificativa e avisos) da build para exibição.
@@ -92,16 +114,89 @@ export const BuildPage: React.FC = () => {
    * @private
    */
   const resetBuildState = useCallback(() => {
-    setPreferencias(null);
+    setBuildPhase('anamnesis');
+    setMessages([]);
+    setPreferencias({ perfilPC: {} as PerfilPCDetalhado, ambiente: {} as Ambiente });
     setCurrentBuild(null);
     setError(null);
     setIsViewingSavedBuild(false);
-    setPageInitialized(false);
+    pageInitialized.current = false;
     sessionStorage.removeItem(SESSION_PENDING_BUILD_KEY);
     sessionStorage.removeItem(SESSION_PENDING_PREFERENCIAS_KEY);
     setPendingActionForAuth(null);
     navigate('/build', { replace: true, state: { newBuild: true, timestamp: Date.now() } });
   }, [navigate]);
+
+  const handleSendMessage = useCallback(async (userInput: string) => {
+    addMessage('user', userInput);
+    setIsAiThinking(true);
+
+    try {
+        if (buildPhase === 'anamnesis') {
+            const response = await conductAnamnesis(messages, userInput, preferencias);
+            if (!response) throw new Error("A IA não retornou uma resposta válida.");
+            
+            addMessage('ai', response.aiResponseText);
+            setPreferencias(response.updatedPreferencias);
+
+            if (response.actionRequired === 'request_location_permission') {
+              setAwaitingLocationPermission(true);
+            }
+
+            if (response.isComplete) {
+                setBuildPhase('generating');
+                addMessage('system', 'Ótimo, requisitos coletados! Gerando sua build inicial...');
+
+                const buildResponse = await generateOrUpdateBuild("GENERATE_INITIAL_BUILD", response.updatedPreferencias, availableComponents!, null);
+                if (!buildResponse) throw new Error("Falha ao gerar a build inicial.");
+
+                const componentMap = new Map(availableComponents!.map(c => [c.id, c]));
+                const recommendedComponents = buildResponse.recommendedComponentIds
+                    .map(id => componentMap.get(id))
+                    .filter((c): c is Componente => Boolean(c));
+
+                const newBuild: Build = {
+                    id: crypto.randomUUID(),
+                    nome: `Build para ${buildResponse.updatedPreferencias.perfilPC.purpose || 'Uso Geral'}`,
+                    componentes: recommendedComponents,
+                    orcamento: buildResponse.estimatedTotalPrice,
+                    dataCriacao: new Date().toISOString(),
+                    requisitos: buildResponse.updatedPreferencias,
+                    justificativa: buildResponse.justification,
+                };
+                setCurrentBuild(newBuild);
+                setPreferencias(buildResponse.updatedPreferencias);
+                addMessage('ai', buildResponse.aiResponseText);
+                setBuildPhase('editing');
+            }
+        } else if (buildPhase === 'editing') {
+             const buildResponse = await generateOrUpdateBuild(userInput, preferencias, availableComponents!, currentBuild);
+             if (!buildResponse) throw new Error("Falha ao atualizar a build.");
+
+             const componentMap = new Map(availableComponents!.map(c => [c.id, c]));
+             const recommendedComponents = buildResponse.recommendedComponentIds
+                 .map(id => componentMap.get(id))
+                 .filter((c): c is Componente => Boolean(c));
+
+             const updatedBuild: Build = {
+                ...(currentBuild!),
+                 id: currentBuild!.id,
+                 componentes: recommendedComponents,
+                 orcamento: buildResponse.estimatedTotalPrice,
+                 requisitos: buildResponse.updatedPreferencias,
+                 justificativa: buildResponse.justification,
+             };
+             setCurrentBuild(updatedBuild);
+             setPreferencias(buildResponse.updatedPreferencias);
+             addMessage('ai', buildResponse.aiResponseText);
+        }
+    } catch (error: any) {
+        console.error("Error handling message:", error);
+        addMessage('system', error.message || 'Desculpe, ocorreu um erro. Tente novamente.');
+    } finally {
+        setIsAiThinking(false);
+    }
+  }, [addMessage, buildPhase, messages, preferencias, availableComponents, currentBuild]);
 
   /**
    * Executa a lógica de salvar a build no Supabase, chamando uma função RPC.
@@ -117,11 +212,15 @@ export const BuildPage: React.FC = () => {
     setIsSaving(true);
     setError(null);
     try {
-        // Sanitiza o objeto de requisitos para garantir que ele seja um JSON válido,
-        // removendo quaisquer propriedades não serializáveis que possam ter sido introduzidas.
         const sanitizedRequisitos = buildToSave.requisitos
             ? JSON.parse(JSON.stringify(buildToSave.requisitos))
             : null;
+        
+        const justificationText = buildToSave.justificativa || '';
+        const warningsRegex = /Avisos de Compatibilidade:([\s\S]*)/i;
+        const warningsMatch = justificationText.match(warningsRegex);
+        const warningsText = warningsMatch ? warningsMatch[1].trim() : '';
+        const warnings = warningsText ? warningsText.split('\n').map(w => w.replace(/^- /, '').trim()).filter(Boolean) : [];
 
         const { error: rpcError } = await supabase.rpc('upsert_build_with_components', {
             p_build_id: buildToSave.id,
@@ -129,7 +228,7 @@ export const BuildPage: React.FC = () => {
             p_orcamento: buildToSave.orcamento,
             p_data_criacao: buildToSave.dataCriacao,
             p_requisitos: sanitizedRequisitos,
-            p_avisos_compatibilidade: buildToSave.avisos_compatibilidade || [],
+            p_avisos_compatibilidade: warnings,
             p_component_ids: buildToSave.componentes.map(c => c.id)
         });
 
@@ -142,24 +241,9 @@ export const BuildPage: React.FC = () => {
 
     } catch (error: any) {
         console.error("Save build raw error object:", error);
-        
-        let fullMessage;
-        if (error && typeof error === 'object' && error.message) {
-            const message = error.message;
-            const details = error.details ? `\nDetalhes: ${error.details}` : '';
-            const hint = error.hint ? `\nDica: ${error.hint}` : '';
-            fullMessage = `Falha ao salvar a build: ${message}${details}${hint}`;
-        } else {
-            let technicalDetails = '';
-            try {
-                const detailsString = JSON.stringify(error);
-                if (detailsString !== '{}') technicalDetails = `Detalhes técnicos: ${detailsString}`;
-            } catch (e) {
-                technicalDetails = 'Não foi possível obter os detalhes do erro.';
-            }
-            fullMessage = `Ocorreu um erro inesperado ao salvar. ${technicalDetails}`.trim();
-        }
+        const fullMessage = `Ocorreu um erro inesperado ao salvar: ${error.message || 'Detalhes desconhecidos.'}`;
         setError(fullMessage);
+        toast.error(fullMessage);
     } finally {
         setIsSaving(false);
     }
@@ -223,9 +307,8 @@ export const BuildPage: React.FC = () => {
     const pathParts = location.pathname.split('/');
     const buildId = pathParts.length > 2 && pathParts[1] === 'build' ? pathParts[2] : null;
 
-    if (location.state?.newBuild && !pageInitialized) {
-        resetBuildState();
-        setPageInitialized(true);
+    if (location.state?.newBuild) {
+        if(pageInitialized.current) resetBuildState();
         return;
     }
     
@@ -234,10 +317,8 @@ export const BuildPage: React.FC = () => {
       
         setIsLoading(true);
         const fetchSavedBuild = async () => {
-            const allComponents = await getComponents();
-            if(!allComponents?.length) {
-                setError("Não foi possível carregar os componentes para exibir a build salva.");
-                setIsLoading(false);
+            if(!availableComponents?.length) {
+                // Espera os componentes carregarem
                 return;
             }
             
@@ -246,17 +327,15 @@ export const BuildPage: React.FC = () => {
                 setError(`A build com o ID '${buildId}' não foi encontrada.`);
                 resetBuildState();
             } else if (data) {
-                const componentMap = new Map(allComponents.map(c => [c.id, c]));
+                const componentMap = new Map(availableComponents.map(c => [c.id, c]));
                 const components = (data.build_components as any[]).map(bc => componentMap.get(String(bc.component_id))).filter(Boolean);
                 
                 const warnings = data.avisos_compatibilidade || [];
-                const justificationFromDb = warnings.length > 0
-                    ? `Avisos de Compatibilidade:\n${warnings.map(w => `- ${w}`).join('\n')}`
-                    : undefined;
+                const justificationFromDb = `Avisos de Compatibilidade:\n${warnings.map(w => `- ${w}`).join('\n')}`;
 
                 const formattedBuild: Build = {
                     id: data.id, nome: data.nome, orcamento: data.orcamento, dataCriacao: data.data_criacao,
-                    justificativa: justificationFromDb,
+                    justificativa: data.requisitos?.justificativa || justificationFromDb,
                     avisos_compatibilidade: warnings,
                     requisitos: data.requisitos as PreferenciaUsuarioInput || undefined,
                     componentes: components as Componente[], userId: data.user_id,
@@ -264,16 +343,17 @@ export const BuildPage: React.FC = () => {
                 setCurrentBuild(formattedBuild);
                 setPreferencias(formattedBuild.requisitos || { perfilPC: {} as PerfilPCDetalhado, ambiente: {} as Ambiente });
                 setIsViewingSavedBuild(true);
+                setBuildPhase('editing');
             }
             setIsLoading(false);
         };
-        if(availableComponents) fetchSavedBuild();
+        fetchSavedBuild();
     }
-  }, [location.pathname, location.state, currentBuild?.id, isViewingSavedBuild, resetBuildState, navigate, availableComponents, pageInitialized]);
+  }, [location.pathname, location.state, currentBuild?.id, isViewingSavedBuild, resetBuildState, navigate, availableComponents]);
 
   // Efeito para gerenciar a lógica de autenticação pós-ação (ex: salvar build após login).
   useEffect(() => {
-    if (!currentUser && !location.pathname.includes('/build/') && !hasProceededAnonymously.current && !currentBuild && !isLoading && availableComponents) {
+    if (!currentUser && !location.pathname.includes('/build/') && !hasProceededAnonymously.current && buildPhase === 'anamnesis' && !isLoading && availableComponents) {
       setIsAuthInfoModalOpen(true);
     }
     if (currentUser && location.state?.fromLogin && location.state?.action) {
@@ -299,7 +379,54 @@ export const BuildPage: React.FC = () => {
         return () => clearTimeout(timerId);
       }
     }
-  }, [currentUser, location, navigate, currentBuild, isLoading, executeActualSaveBuild, executeActualExportBuild, availableComponents]);
+  }, [currentUser, location, navigate, isLoading, executeActualSaveBuild, executeActualExportBuild, availableComponents, buildPhase]);
+  
+  const handleLocationPermissionFlow = useCallback(async (allow: boolean) => {
+    setAwaitingLocationPermission(false);
+    let systemMessageForAnamnesis = "";
+    let updatedPrefs = JSON.parse(JSON.stringify(preferencias)) as PreferenciaUsuarioInput;
+    if (!updatedPrefs.ambiente) updatedPrefs.ambiente = {} as Ambiente;
+
+    if (allow) {
+        addMessage('system', 'Tentando obter sua localização e dados climáticos anuais...');
+        setIsAiThinking(true);
+        try {
+            const loc: GeoLocation | null = await getUserLocation();
+            if (loc && loc.city) {
+                updatedPrefs.ambiente.cidade = loc.city;
+                updatedPrefs.ambiente.codigoPais = loc.country_code3;
+                addMessage('system', `Localização detectada: ${loc.city}.`);
+
+                const weather = await getCityWeather(loc.latitude, loc.longitude);
+                if (weather) {
+                    updatedPrefs.ambiente.temperaturaMediaAnual = weather.avgTemp;
+                    updatedPrefs.ambiente.temperaturaMaximaAnual = weather.maxTemp;
+                    updatedPrefs.ambiente.temperaturaMinimaAnual = weather.minTemp;
+                    addMessage('system', `Clima anual em ${loc.city}: Média ${weather.avgTemp}°C, Máx ${weather.maxTemp}°C.`);
+                    systemMessageForAnamnesis = `O usuário permitiu a localização. Dados de clima coletados. Continue a anamnese.`;
+                } else {
+                     addMessage('system', 'Não foi possível obter os dados climáticos.');
+                     systemMessageForAnamnesis = `Localização detectada, mas sem dados de clima. Continue a anamnese.`;
+                }
+            } else {
+                addMessage('system', 'Não foi possível detectar sua localização automaticamente.');
+                systemMessageForAnamnesis = `Falha na detecção automática. Peça ao usuário para informar a cidade manualmente.`;
+            }
+        } catch (error) {
+             addMessage('system', 'Ocorreu um erro ao obter a localização.');
+             systemMessageForAnamnesis = `Erro técnico na detecção de localização. Peça ao usuário para informar a cidade manualmente.`;
+        }
+    } else {
+        addMessage('system', 'Usuário não permitiu detecção automática.');
+        systemMessageForAnamnesis = `O usuário negou a permissão de localização. Peça para ele informar a cidade manualmente.`;
+    }
+
+    setPreferencias(updatedPrefs);
+    // Chama a IA novamente com o contexto da decisão de localização
+    handleSendMessage(systemMessageForAnamnesis);
+
+  }, [addMessage, handleSendMessage, preferencias]);
+
 
   const handleLoginForBuild = () => {
     setIsAuthInfoModalOpen(false);
@@ -310,28 +437,6 @@ export const BuildPage: React.FC = () => {
     hasProceededAnonymously.current = true;
     sessionStorage.setItem(SESSION_PROCEEDED_ANONYMOUSLY_KEY, 'true');
   };
-  
-  /**
-   * Callback passada para o ChatbotAnamnesis para receber atualizações da build em tempo real.
-   * @param build - O objeto da build atualizado pela IA.
-   * @param finalPreferences - As preferências do usuário atualizadas.
-   * @private
-   */
-  const handleBuildUpdate = useCallback((build: Build, finalPreferences: PreferenciaUsuarioInput) => {
-     const justificationText = build.justificativa || '';
-     const warningsRegex = /Avisos de Compatibilidade:([\s\S]*)/i;
-     const warningsMatch = justificationText.match(warningsRegex);
-     const warningsText = warningsMatch ? warningsMatch[1].trim() : '';
-     const warnings = warningsText ? warningsText.split('\n').map(w => w.replace(/^- /, '').trim()).filter(Boolean) : [];
-
-    const buildWithWarnings: Build = {
-        ...build,
-        avisos_compatibilidade: warnings,
-    };
-
-    setCurrentBuild(buildWithWarnings);
-    setPreferencias(finalPreferences);
-  }, []);
 
   /**
    * Dispara uma ação que requer autenticação ('save' ou 'export').
@@ -364,7 +469,7 @@ export const BuildPage: React.FC = () => {
    * @private
    */
   const renderContent = () => {
-    if (isLoading && !availableComponents) {
+    if (isLoading) {
        return <div className="text-center py-10"><LoadingSpinner size="lg" text={'Carregando componentes...'} /></div>;
     }
     if (error) {
@@ -379,7 +484,7 @@ export const BuildPage: React.FC = () => {
     if (isViewingSavedBuild) {
         return (
              <>
-              <BuildSummary build={currentBuild} onSaveBuild={triggerSaveBuild} isSaving={isSaving} onExportBuild={triggerExportBuild} aiRecommendationNotes={aiNotesToDisplay} />
+              <BuildSummary build={currentBuild} phase="editing" onSaveBuild={triggerSaveBuild} isSaving={isSaving} onExportBuild={triggerExportBuild} aiRecommendationNotes={aiNotesToDisplay} />
               <div className="mt-6 text-center">
                 <Button onClick={resetBuildState} variant="secondary" size="lg">
                     Iniciar Nova Montagem com IA
@@ -393,19 +498,21 @@ export const BuildPage: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
         <div className="lg:col-span-3">
             <ChatbotAnamnesis 
-              key={location.state?.timestamp || 'chat-init'} 
-              onBuildUpdate={handleBuildUpdate}
-              availableComponents={availableComponents}
-              initialAnamnesisData={preferencias || { perfilPC: {} as PerfilPCDetalhado, ambiente: {} as Ambiente }}
+              messages={messages}
+              onSendMessage={handleSendMessage}
+              isLoading={isAiThinking}
+              isAwaitingLocationPermission={isAwaitingLocationPermission}
+              onAllowLocation={() => handleLocationPermissionFlow(true)}
+              onDenyLocation={() => handleLocationPermissionFlow(false)}
             />
         </div>
         <div className="lg:col-span-2 mt-8 lg:mt-0">
             <div className="sticky top-24">
               <BuildSummary 
                   build={currentBuild} 
-                  isLoading={false} 
-                  onSaveBuild={currentBuild ? triggerSaveBuild : undefined}
+                  phase={buildPhase}
                   isSaving={isSaving}
+                  onSaveBuild={currentBuild ? triggerSaveBuild : undefined}
                   onExportBuild={currentBuild ? triggerExportBuild : undefined}
                   aiRecommendationNotes={aiNotesToDisplay}
               />

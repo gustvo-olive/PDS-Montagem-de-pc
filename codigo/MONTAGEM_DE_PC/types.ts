@@ -259,20 +259,29 @@ export interface ChatMessage {
 }
 
 /**
- * Estrutura da recomendação retornada pela IA após a anamnese.
- * @deprecated Esta estrutura foi substituída pela resposta JSON em `getLiveBuildResponse`.
+ * Define as fases do processo de montagem.
  */
-export interface AIRecommendation {
-  /** IDs dos componentes recomendados pela IA. */
+export type BuildPhase = 'anamnesis' | 'generating' | 'editing';
+
+/**
+ * Estrutura da resposta da IA durante a fase de anamnese.
+ */
+export interface AnamnesisResponse {
+  actionRequired?: 'request_location_permission' | 'none';
+  aiResponseText: string;
+  updatedPreferencias: PreferenciaUsuarioInput;
+  isComplete: boolean;
+}
+
+/**
+ * Estrutura da resposta da IA durante a fase de montagem ou edição.
+ */
+export interface BuildResponse {
+  aiResponseText: string;
+  updatedPreferencias: PreferenciaUsuarioInput;
   recommendedComponentIds: string[];
-  /** Explicação detalhada das escolhas da IA. */
   justification: string;
-  /** Preço total estimado da build. */
-  estimatedTotalPrice?: number;
-  /** Notas sobre como o orçamento foi utilizado. */
-  budgetNotes?: string;
-  /** Avisos de compatibilidade ou gargalos potenciais. */
-  compatibilityWarnings?: string[];
+  estimatedTotalPrice: number;
 }
 
 /**

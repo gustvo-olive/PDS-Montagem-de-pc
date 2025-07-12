@@ -8,11 +8,8 @@
  */
 
 // Importações de React, tipos, serviços e componentes de UI.
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { PreferenciaUsuarioInput, ChatMessage, Build, Componente, Ambiente, PerfilPCDetalhado } from '../../types';
-import { getLiveBuildResponse } from '../../services/geminiService';
-import { getUserLocation, GeoLocation } from '../../services/geoService';
-import { getCityWeather } from '../../services/weatherService';
+import React, { useState, useRef, useEffect } from 'react';
+import { ChatMessage } from '../../types';
 import Button from '../core/Button';
 import LoadingSpinner from '../core/LoadingSpinner';
 
@@ -21,20 +18,14 @@ import LoadingSpinner from '../core/LoadingSpinner';
  * @description Propriedades para o componente ChatbotAnamnesis.
  */
 interface ChatbotAnamnesisProps {
-  /**
-   * Callback acionada a cada atualização da IA com uma nova build e as preferências atualizadas.
-   * @param build - O objeto da build atualizado.
-   * @param finalPreferences - O objeto de preferências do usuário atualizado.
-   */
-  onBuildUpdate: (build: Build, finalPreferences: PreferenciaUsuarioInput) => void;
-  /**
-   * A lista de todos os componentes de hardware disponíveis para a IA escolher.
-   */
-  availableComponents: Componente[] | null;
-  /**
-   * Dados de anamnese iniciais, caso o usuário esteja continuando uma build.
-   */
-  initialAnamnesisData?: PreferenciaUsuarioInput;
+  messages: ChatMessage[];
+  onSendMessage: (input: string) => void;
+  isLoading: boolean;
+
+  // Props para o fluxo de permissão de localização
+  isAwaitingLocationPermission: boolean;
+  onAllowLocation: () => void;
+  onDenyLocation: () => void;
 }
 
 /**
@@ -45,186 +36,39 @@ interface ChatbotAnamnesisProps {
  * @param {ChatbotAnamnesisProps} props - Propriedades para inicializar o chatbot, incluindo `onBuildUpdate`, `availableComponents`, e dados iniciais.
  * @returns {React.ReactElement} A interface de chat interativa.
  */
-const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onBuildUpdate, availableComponents, initialAnamnesisData }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({
+  messages,
+  onSendMessage,
+  isLoading,
+  isAwaitingLocationPermission,
+  onAllowLocation,
+  onDenyLocation,
+}) => {
   const [userInput, setUserInput] = useState<string>('');
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [preferencias, setPreferencias] = useState<PreferenciaUsuarioInput>(
-    initialAnamnesisData || { perfilPC: {} as PerfilPCDetalhado, ambiente: {} as Ambiente }
-  );
-  const initialMessagesSent = useRef(false);
-  const [awaitingLocationPermission, setAwaitingLocationPermission] = useState<boolean>(false);
-  const [locationProcessed, setLocationProcessed] = useState<boolean>(!!initialAnamnesisData?.ambiente?.cidade);
-
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
 
   const scrollToBottom = () => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   useEffect(scrollToBottom, [messages]);
   
-  /**
-   * Adiciona uma nova mensagem à lista de mensagens do chat.
-   * @param sender - Quem enviou a mensagem ('user', 'ai', 'system').
-   * @param text - O conteúdo da mensagem.
-   * @private
-   */
-  const addMessage = useCallback((sender: 'user' | 'ai' | 'system', text: string) => {
-    setMessages(prev => [...prev, { id: Date.now().toString() + Math.random(), sender, text, timestamp: Date.now() }]);
-  }, []);
-
-  /**
-   * Função central que chama o serviço da IA para obter a próxima resposta e a build atualizada.
-   * @param input - A entrada a ser enviada para a IA (geralmente a mensagem do usuário).
-   * @param currentData - O estado atual das preferências do usuário.
-   * @private
-   */
-  const callLiveBuilder = useCallback(async (input: string, currentData: PreferenciaUsuarioInput) => {
-    if (!availableComponents) {
-        addMessage('system', 'Erro: A lista de componentes não está disponível.');
-        return;
-    }
-    setIsLoading(true);
-    try {
-      const response = await getLiveBuildResponse(messagesRef.current, input, currentData, availableComponents);
-      if (response) {
-          addMessage('ai', response.aiResponseText);
-          setPreferencias(response.updatedPreferencias);
-
-          if (response.actionRequired === 'request_location_permission' && !locationProcessed) {
-            setAwaitingLocationPermission(true);
-          }
-          
-          const componentMap = new Map(availableComponents.map(c => [c.id, c]));
-          const recommendedComponents = response.recommendedComponentIds
-              .map(id => componentMap.get(id))
-              .filter((c): c is Componente => Boolean(c));
-          
-          const totalPrice = typeof response.estimatedTotalPrice === 'number'
-            ? response.estimatedTotalPrice
-            : recommendedComponents.reduce((sum, component) => sum + (component.Preco || 0), 0);
-
-          const newBuild: Build = {
-              id: crypto.randomUUID(),
-              nome: `Build para ${response.updatedPreferencias.perfilPC.purpose || 'Uso Geral'}`,
-              componentes: recommendedComponents,
-              orcamento: totalPrice,
-              dataCriacao: new Date().toISOString(),
-              requisitos: response.updatedPreferencias,
-              justificativa: response.justification,
-          };
-          
-          onBuildUpdate(newBuild, response.updatedPreferencias);
-      } else {
-         addMessage('system', 'A IA não retornou uma resposta válida. Tente novamente.');
-      }
-    } catch (error: any) {
-      console.error("Error in chat:", error);
-      addMessage('system', error.message || 'Desculpe, ocorreu um erro. Tente novamente.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [addMessage, availableComponents, onBuildUpdate, locationProcessed]);
-
-
-  // Efeito para iniciar a conversa quando o componente é montado.
+  // Efeito para focar no campo de input quando não há carregamento ou espera.
   useEffect(() => {
-    if (initialMessagesSent.current) return;
-    if (messages.length === 0 && (!initialAnamnesisData || Object.keys(initialAnamnesisData).length <= 2)) {
-       addMessage('ai', "Olá! Sou o CodeTuga, seu assistente especializado. Conforme você me diz o que precisa, eu montarei seu PC em tempo real na tela ao lado. Vamos começar!");
-       const timeoutId = setTimeout(() => {
-           callLiveBuilder('INICIAR_CONVERSA', preferencias);
-       }, 500);
-       initialMessagesSent.current = true;
-       return () => clearTimeout(timeoutId);
+    if (!isLoading && !isAwaitingLocationPermission) {
+        inputRef.current?.focus();
     }
-  }, [addMessage, initialAnamnesisData, messages.length, callLiveBuilder, preferencias]);
+  }, [isLoading, isAwaitingLocationPermission]);
 
   /**
    * Manipula o envio do formulário de mensagem do usuário.
    * @private
    */
-  const handleSendMessage = async (e?: React.FormEvent<HTMLFormElement>) => {
+  const handleSendMessage = (e?: React.FormEvent<HTMLFormElement>) => {
     if (e) e.preventDefault();
-    if (!userInput.trim() || isLoading || awaitingLocationPermission) return;
-
-    const userMsgText = userInput;
-    addMessage('user', userMsgText);
+    if (!userInput.trim() || isLoading || isAwaitingLocationPermission) return;
+    onSendMessage(userInput);
     setUserInput('');
-    await callLiveBuilder(userMsgText, preferencias);
   };
   
-  // Efeito para focar no campo de input quando não há carregamento ou espera.
-  useEffect(() => {
-    if (!isLoading && !awaitingLocationPermission) {
-        inputRef.current?.focus();
-    }
-  }, [isLoading, awaitingLocationPermission]);
-
-  /**
-   * Lida com a permissão de geolocalização automática pelo usuário.
-   * @private
-   */
-  const handleAutoLocation = async () => {
-    setAwaitingLocationPermission(false);
-    setLocationProcessed(true);
-    let systemMessageForGemini = "";
-    let currentPrefs = JSON.parse(JSON.stringify(preferencias)) as PreferenciaUsuarioInput;
-    if (!currentPrefs.ambiente) currentPrefs.ambiente = {} as Ambiente;
-
-    addMessage('system', 'Você permitiu a detecção. Tentando obter sua localização e dados climáticos anuais (isso pode levar um momento)...');
-    setIsLoading(true); 
-    try {
-      const loc: GeoLocation | null = await getUserLocation();
-      if (loc && loc.city) {
-        currentPrefs.ambiente.cidade = loc.city;
-        currentPrefs.ambiente.codigoPais = loc.country_code3;
-        
-        const locationMsg = `Localização detectada: ${loc.city}, ${loc.country_code3}.`;
-        addMessage('system', locationMsg);
-
-        const weather = await getCityWeather(loc.latitude, loc.longitude);
-        if (weather) {
-          currentPrefs.ambiente.temperaturaMediaAnual = weather.avgTemp;
-          currentPrefs.ambiente.temperaturaMaximaAnual = weather.maxTemp;
-          currentPrefs.ambiente.temperaturaMinimaAnual = weather.minTemp;
-          
-          const weatherMsg = `Clima em ${loc.city}: Temp. Média Anual: ${weather.avgTemp}°C, Máx. Anual: ${weather.maxTemp}°C, Mín. Anual: ${weather.minTemp}°C.`;
-          addMessage('system', weatherMsg);
-          
-          systemMessageForGemini = `Informação do sistema: O usuário permitiu a detecção de localização. Os dados de clima foram coletados (${locationMsg} ${weatherMsg}). Por favor, prossiga para a próxima pergunta lógica.`;
-        } else {
-          addMessage('system', 'Não foi possível obter os dados climáticos para sua região.');
-          systemMessageForGemini = `Informação do sistema: Localização detectada como ${loc.city}, mas não foi possível obter dados climáticos. Prossiga para a próxima pergunta.`;
-        }
-        await callLiveBuilder(systemMessageForGemini, currentPrefs);
-      } else {
-        addMessage('system', 'Não foi possível detectar sua localização automaticamente.');
-        addMessage('ai', 'Não consegui detectar sua localização. Por favor, para otimizar a refrigeração, me diga em qual cidade e estado você mora (ex: "São Paulo, SP").');
-        setIsLoading(false);
-      }
-    } catch (error) {
-      console.error("Error getting location/weather:", error);
-      addMessage('system', 'Ocorreu um erro ao tentar obter sua localização ou clima.');
-      addMessage('ai', 'Ocorreu um erro técnico. Por favor, para otimizar a refrigeração, me diga em qual cidade e estado você mora (ex: "São Paulo, SP").');
-      setIsLoading(false);
-    }
-  };
-
-  /**
-   * Lida com a recusa do usuário em fornecer a localização automaticamente.
-   * @private
-   */
-  const handleManualLocationPrompt = () => {
-    setAwaitingLocationPermission(false);
-    setLocationProcessed(true);
-    addMessage('system', 'Usuário não permitiu detecção automática.');
-    addMessage('ai', 'Tudo bem. Para otimizar a refrigeração, por favor, me diga em qual cidade e estado você mora (ex: "Rio de Janeiro, RJ").');
-    inputRef.current?.focus();
-  };
-
-
   return (
     <div className="bg-secondary p-4 sm:p-6 rounded-lg shadow-xl h-full flex flex-col">
       <h2 className="text-2xl font-semibold text-accent mb-4 text-center">Converse Comigo para Montar seu PC</h2>
@@ -245,21 +89,21 @@ const ChatbotAnamnesis: React.FC<ChatbotAnamnesisProps> = ({ onBuildUpdate, avai
         {isLoading && (
              <div className="flex justify-start">
                 <div className="max-w-xs lg:max-w-md px-4 py-2 rounded-xl shadow bg-neutral-dark text-neutral">
-                    <LoadingSpinner size="sm" text="Montando..." />
+                    <LoadingSpinner size="sm" text="Pensando..." />
                 </div>
             </div>
         )}
         <div ref={chatEndRef} />
       </div>
 
-      {awaitingLocationPermission ? (
+      {isAwaitingLocationPermission ? (
         <div className="my-2 p-4 border border-accent rounded-md bg-primary">
             <p className="text-neutral mb-3 text-center text-sm">A IA está pedindo sua localização para otimizar a refrigeração.</p>
           <div className="flex flex-col sm:flex-row gap-3">
-            <Button onClick={handleAutoLocation} variant="primary" isLoading={isLoading} className="flex-1">
+            <Button onClick={onAllowLocation} variant="primary" isLoading={isLoading} className="flex-1">
               Permitir Detecção Automática
             </Button>
-            <Button onClick={handleManualLocationPrompt} variant="secondary" isLoading={isLoading} className="flex-1">
+            <Button onClick={onDenyLocation} variant="secondary" isLoading={isLoading} className="flex-1">
               Não Permitir / Informar Manualmente
             </Button>
           </div>

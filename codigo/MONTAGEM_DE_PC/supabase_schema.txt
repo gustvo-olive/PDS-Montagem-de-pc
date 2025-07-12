@@ -74,6 +74,7 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
 
 -- Função RPC para salvar/atualizar uma build e seus componentes de forma atômica.
+-- Corrigida para usar um fluxo explícito de UPDATE/INSERT para evitar problemas de RLS com ON CONFLICT.
 CREATE OR REPLACE FUNCTION public.upsert_build_with_components(
     p_build_id uuid,
     p_nome text,
@@ -85,37 +86,38 @@ CREATE OR REPLACE FUNCTION public.upsert_build_with_components(
 )
 RETURNS void
 LANGUAGE plpgsql
--- SECURITY INVOKER é o padrão, então as políticas RLS serão aplicadas com base no usuário que chama a função.
 AS $$
 DECLARE
     v_current_user_id uuid := auth.uid();
-    v_comp_id text;
 BEGIN
-    -- Etapa 1: Faz o "upsert" da build.
-    -- Insere uma nova build ou atualiza uma existente com base no ID.
-    INSERT INTO public.builds (id, user_id, nome, orcamento, data_criacao, requisitos, avisos_compatibilidade)
-    VALUES (p_build_id, v_current_user_id, p_nome, p_orcamento, p_data_criacao, p_requisitos, p_avisos_compatibilidade)
-    ON CONFLICT (id) DO UPDATE SET
-        nome = EXCLUDED.nome,
-        orcamento = EXCLUDED.orcamento,
-        requisitos = EXCLUDED.requisitos,
-        avisos_compatibilidade = EXCLUDED.avisos_compatibilidade;
+    -- Etapa 1: Tenta ATUALIZAR uma build existente que pertença ao usuário.
+    UPDATE public.builds
+    SET
+        nome = p_nome,
+        orcamento = p_orcamento,
+        requisitos = p_requisitos,
+        avisos_compatibilidade = p_avisos_compatibilidade
+    WHERE id = p_build_id AND user_id = v_current_user_id;
 
-    -- Etapa 2: Remove os componentes antigos associados a esta build para evitar duplicatas.
-    -- A RLS garante que o usuário só pode deletar de builds que ele possui.
+    -- Etapa 2: Se nenhuma linha foi atualizada (porque a build não existia),
+    -- insere uma nova. A RLS na tabela `builds` para INSERT garantirá a posse.
+    IF NOT FOUND THEN
+        INSERT INTO public.builds (id, user_id, nome, orcamento, data_criacao, requisitos, avisos_compatibilidade)
+        VALUES (p_build_id, v_current_user_id, p_nome, p_orcamento, p_data_criacao, p_requisitos, p_avisos_compatibilidade);
+    END IF;
+
+    -- Etapa 3: Remove os componentes antigos associados a esta build.
+    -- A RLS na tabela `build_components` cuida da segurança aqui.
     DELETE FROM public.build_components WHERE build_id = p_build_id;
 
-    -- Etapa 3: Insere os novos componentes.
-    -- A RLS garante que o usuário só pode inserir em builds que ele possui.
+    -- Etapa 4: Insere os novos componentes em massa.
     IF p_component_ids IS NOT NULL AND array_length(p_component_ids, 1) > 0 THEN
-        FOREACH v_comp_id IN ARRAY p_component_ids
-        LOOP
-            INSERT INTO public.build_components (build_id, component_id)
-            VALUES (p_build_id, v_comp_id);
-        END LOOP;
+        INSERT INTO public.build_components (build_id, component_id)
+        SELECT p_build_id, unnest(p_component_ids);
     END IF;
 END;
 $$;
+
 
 -- Função RPC para deletar uma build e seus componentes de forma segura,
 -- contornando problemas de RLS com ON DELETE CASCADE.

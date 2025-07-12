@@ -8,8 +8,8 @@
  */
 
 // Importa os tipos e classes necessários do SDK do Google GenAI e dos tipos locais.
-import { GoogleGenAI, GenerateContentResponse, Part, Content } from "@google/genai";
-import { PreferenciaUsuarioInput, ChatMessage, Componente, AIRecommendation, Ambiente, PerfilPCDetalhado, Build } from '../types';
+import { GoogleGenAI, GenerateContentResponse, Content } from "@google/genai";
+import { PreferenciaUsuarioInput, ChatMessage, Componente, Ambiente, PerfilPCDetalhado, Build, AnamnesisResponse, BuildResponse } from '../types';
 
 // Obtém a chave da API a partir das variáveis de ambiente.
 const API_KEY = process.env.API_KEY;
@@ -22,26 +22,6 @@ if (!API_KEY) {
 // Inicializa o cliente da API Gemini. Fornece uma chave substituta para evitar falhas na inicialização.
 const ai = new GoogleGenAI({ apiKey: API_KEY || "NO_KEY_PROVIDED" });
 const TEXT_MODEL_NAME = 'gemini-2.5-flash';
-
-/**
- * @interface GeminiLiveBuildResponse
- * @description Define a estrutura JSON esperada da resposta do chatbot Gemini durante a montagem ao vivo.
- */
-interface GeminiLiveBuildResponse {
-  /** Ação que a UI deve tomar, como pedir permissão de localização. */
-  actionRequired?: 'request_location_permission' | 'none';
-  /** A resposta de texto da IA a ser exibida para o usuário. */
-  aiResponseText: string;
-  /** O objeto de preferências do usuário, atualizado pela IA com as novas informações. */
-  updatedPreferencias: PreferenciaUsuarioInput;
-  /** Um array de IDs dos componentes recomendados que formam a build atual. */
-  recommendedComponentIds: string[];
-  /** Justificativa geral para a build, incluindo uma seção de "Avisos de Compatibilidade". */
-  justification: string;
-  /** O preço total estimado da build recomendada. */
-  estimatedTotalPrice: number;
-}
-
 
 /**
  * Analisa a resposta de texto do Gemini para extrair um bloco de código JSON.
@@ -68,9 +48,6 @@ const parseJsonFromGeminiResponse = <T,>(responseText: string): T | null => {
   try {
     return JSON.parse(jsonStr) as T;
   } catch (e1) {
-    // Tentativa de fallback para um erro comum da IA: inserir um '}' extra antes de uma vírgula.
-    // Exemplo: ... "chave": "valor" }, "proximaChave": "valor" ...
-    // Esta regex substitui '},' por ',', o que pode consertar objetos malformados.
     const fixedJsonStr = jsonStr.replace(/}(\s*),/g, '$1,');
     try {
       return JSON.parse(fixedJsonStr) as T;
@@ -80,6 +57,7 @@ const parseJsonFromGeminiResponse = <T,>(responseText: string): T | null => {
     }
   }
 };
+
 
 /**
  * Pré-filtra a lista de componentes antes de enviá-la para a IA.
@@ -132,47 +110,30 @@ export const preFilterComponents = (components: Componente[], budget?: number): 
 };
 
 /**
- * Obtém a próxima resposta do chatbot e uma build atualizada em tempo real.
- * Esta é a função central que impulsiona a conversa interativa.
- * @param {ChatMessage[]} history - Histórico de mensagens da conversa.
- * @param {string} userInput - A última mensagem enviada pelo usuário.
- * @param {PreferenciaUsuarioInput} currentPreferencias - O estado atual das preferências coletadas.
- * @param {Componente[]} availableComponents - A lista de componentes disponíveis para seleção.
- * @returns {Promise<GeminiLiveBuildResponse | null>} Um objeto contendo a resposta da IA, preferências atualizadas e a build recomendada.
- * @throws {Error} Lança um erro se houver um erro na comunicação com a API Gemini, incluindo erros de limite de taxa.
+ * Conduz a conversa de anamnese para coletar os requisitos do usuário.
+ * @param history - Histórico de mensagens da conversa.
+ * @param userInput - A última mensagem enviada pelo usuário.
+ * @param currentPreferencias - O estado atual das preferências coletadas.
+ * @returns Um objeto contendo a resposta da IA, preferências atualizadas e um flag indicando se a anamnese está completa.
  */
-export const getLiveBuildResponse = async (
+export const conductAnamnesis = async (
   history: ChatMessage[],
   userInput: string,
   currentPreferencias: PreferenciaUsuarioInput,
-  availableComponents: Componente[]
-): Promise<GeminiLiveBuildResponse | null> => {
+): Promise<AnamnesisResponse | null> => {
     if (!API_KEY) {
         console.error("API Key do Gemini não configurada.");
         return null;
     }
-    
-    const smartFilteredComponents = preFilterComponents(availableComponents, currentPreferencias.orcamento);
-    const componentSummary = smartFilteredComponents.map(c => ({
-        id: c.id,
-        Produto: c.Produto,
-        Preco: c.Preco,
-        Categoria: c.Categoria,
-    }));
 
     const isStartingConversation = userInput === 'INICIAR_CONVERSA';
     const historyTextLower = history.map(h => h.text).join('\n').toLowerCase();
     const locationAlreadyHandled = !!currentPreferencias.ambiente?.cidade || historyTextLower.includes('não permitiu detecção automática') || historyTextLower.includes('não foi possível detectar');
 
-    const systemInstruction = `Você é CodeTuga, um especialista em montagem de PCs. Sua tarefa é interativamente construir uma lista de peças com o usuário. Em CADA turno, você deve:
-1.  **Analisar e Atualizar:** Analisar a mensagem do usuário, o histórico e o \`currentPreferencias\`. Atualize o objeto \`PreferenciaUsuarioInput\` com as novas informações. NÃO remova dados existentes, apenas adicione ou modifique.
-2.  **Selecionar Componentes:** Com base nas preferências ATUALIZADAS, selecione um conjunto COMPLETO e COMPATÍVEL da lista \`availableComponents\`.
-    -   **SEMPRE selecione UM de cada categoria essencial:** 'Processadores', 'Placas-Mãe', 'Memória RAM', 'SSD', 'Fonte', 'Gabinete'.
-    -   'Placa de Vídeo' é OBRIGATÓRIA, a menos que o propósito seja servidor/escritório e o CPU tenha vídeo integrado.
-    -   'Cooler' é crucial para CPUs de alto desempenho ('K', 'X', i7/i9, R7/R9) ou climas quentes.
-    -   **REGRA MAIS IMPORTANTE:** Se o usuário informou \`ownedComponents\`, você DEVE usar essas peças e NÃO selecionar novas para essas categorias. Garanta 100% de compatibilidade com as peças do usuário.
-    -   Mesmo com pouca informação (ex: apenas orçamento), faça uma seleção inicial balanceada. Você a refinará a cada nova informação do usuário.
-3.  **Perguntar ou Confirmar:** Determine a próxima pergunta lógica a ser feita seguindo o "Fluxo de Perguntas" para obter mais informações. Se todos os dados essenciais forem coletados, confirme com o usuário.
+    const systemInstruction = `Você é CodeTuga, um especialista em montagem de PCs. Sua tarefa é APENAS conduzir a anamnese (coleta de requisitos). Em CADA turno, você deve:
+1.  **Analisar e Atualizar:** Analisar a mensagem do usuário, o histórico e o \`currentPreferencias\`. Atualize o objeto \`PreferenciaUsuarioInput\` com as novas informações. NÃO remova dados existentes.
+2.  **Perguntar:** Determine a próxima pergunta lógica a ser feita para obter mais informações, seguindo estritamente o "Fluxo de Perguntas".
+3.  **Finalizar Anamnese:** Quando você tiver coletado o ORÇAMENTO e o PROPÓSITO PRINCIPAL, defina \`isComplete: true\` no seu JSON de resposta.
 
 **Fluxo de Perguntas (Siga esta ordem):**
 *   SE \`!orcamento\` e \`!orcamentoRange\`, pergunte pelo orçamento.
@@ -183,29 +144,27 @@ export const getLiveBuildResponse = async (
 *   SENÃO, SE \`!ownedComponents\`, pergunte se o usuário já possui alguma peça.
 *   SENÃO, SE ${!locationAlreadyHandled}, peça permissão para detectar a localização para otimizar a refrigeração. **Ao fazer esta pergunta, defina "actionRequired": "request_location_permission" no JSON de resposta.**
 *   SENÃO, SE \`!preferences\`, pergunte por outras preferências (estética, ruído, etc.).
-*   SENÃO (TODOS os dados coletados), confirme a seleção. Ex: "Com base em tudo que conversamos, esta é a build final. O que acha? Podemos fazer ajustes."
+*   SENÃO (TODOS os dados coletados), confirme que a anamnese está completa.
 
 **Formato da Saída (JSON OBRIGATÓRIO):**
 \`\`\`json
 {
   "actionRequired": "none",
-  "aiResponseText": "Sua próxima pergunta ou mensagem de confirmação.",
+  "aiResponseText": "Sua próxima pergunta.",
   "updatedPreferencias": { /* O objeto PreferenciaUsuarioInput COMPLETO e ATUALIZADO */ },
-  "recommendedComponentIds": ["id_processador", "id_placa_mae", ...],
-  "justification": "Forneça um resumo geral sobre a build, seus pontos fortes e propósito. Se houver QUALQUER aviso de compatibilidade (ex: gargalo de CPU/GPU, TDP da fonte próximo do limite, etc.), liste-os CLARAMENTE sob um título 'Avisos de Compatibilidade:'. Ex: 'Visão Geral: ...\\n\\nAvisos de Compatibilidade:\\n- A fonte de 650W é suficiente, mas um upgrade para 750W é recomendado para futuras atualizações.'",
-  "estimatedTotalPrice": 1234.56
+  "isComplete": false
 }
 \`\`\`
+**IMPORTANTE: NUNCA inclua 'recommendedComponentIds', 'justification', ou 'estimatedTotalPrice' nesta fase.**
 
 **Contexto Atual:**
 - Objeto \`currentPreferencias\`: ${JSON.stringify(currentPreferencias)}
-- Componentes Disponíveis: ${JSON.stringify(componentSummary, null, 2)}
 `;
-
+    
     try {
         const userMessageForPrompt = isStartingConversation
-            ? "A conversa está apenas começando. Siga o 'Fluxo de Perguntas' e faça a primeira pergunta, retornando uma build inicial baseada em um orçamento médio."
-            : `Última mensagem do usuário: "${userInput}"\n\nCom base nisso, no contexto e no histórico, gere o JSON de resposta seguindo todas as instruções.`;
+            ? "A conversa está apenas começando. Siga o 'Fluxo de Perguntas' e faça a primeira pergunta."
+            : `Última mensagem do usuário: "${userInput}"`;
 
         const chatHistoryForGemini: Content[] = history.map(msg => ({
             role: msg.sender === 'user' ? 'user' : 'model',
@@ -222,10 +181,10 @@ export const getLiveBuildResponse = async (
             },
         });
         
-        const parsedResponse = parseJsonFromGeminiResponse<GeminiLiveBuildResponse>(result.text);
+        const parsedResponse = parseJsonFromGeminiResponse<AnamnesisResponse>(result.text);
 
-        if (!parsedResponse || !parsedResponse.aiResponseText || !parsedResponse.updatedPreferencias || !parsedResponse.recommendedComponentIds) {
-            console.error("Resposta da IA está malformada ou incompleta.", result.text);
+        if (!parsedResponse || !parsedResponse.aiResponseText || !parsedResponse.updatedPreferencias) {
+            console.error("Resposta da IA (Anamnese) está malformada ou incompleta.", result.text);
             return null;
         }
 
@@ -239,14 +198,120 @@ export const getLiveBuildResponse = async (
                 delete parsedResponse.updatedPreferencias.orcamento;
             }
         }
-
+        
         if (!parsedResponse.updatedPreferencias.perfilPC) parsedResponse.updatedPreferencias.perfilPC = {} as PerfilPCDetalhado;
         if (!parsedResponse.updatedPreferencias.ambiente) parsedResponse.updatedPreferencias.ambiente = {} as Ambiente;
 
         return parsedResponse;
 
     } catch (error) {
-        console.error("Erro ao chamar API Gemini (getLiveBuildResponse):", error);
+        console.error("Erro ao chamar API Gemini (conductAnamnesis):", error);
+        // Lidar com o erro de forma apropriada
+        throw error;
+    }
+};
+
+/**
+ * Gera uma nova build ou atualiza uma existente com base nas preferências do usuário.
+ * @param userInput - A última mensagem do usuário (ou um comando como 'GENERATE_INITIAL_BUILD').
+ * @param currentPreferencias - O objeto completo com as preferências do usuário.
+ * @param availableComponents - A lista de componentes de hardware disponíveis.
+ * @param currentBuild - A build atual, se estiver no modo de edição. Nulo para a geração inicial.
+ * @returns Um objeto contendo a nova build, a justificativa e a resposta da IA.
+ */
+export const generateOrUpdateBuild = async (
+    userInput: string,
+    currentPreferencias: PreferenciaUsuarioInput,
+    availableComponents: Componente[],
+    currentBuild: Build | null
+): Promise<BuildResponse | null> => {
+    if (!API_KEY) {
+        console.error("API Key do Gemini não configurada.");
+        return null;
+    }
+
+    const smartFilteredComponents = preFilterComponents(availableComponents, currentPreferencias.orcamento);
+    const componentSummary = smartFilteredComponents.map(c => ({
+        id: c.id,
+        Produto: c.Produto,
+        Preco: c.Preco,
+        Categoria: c.Categoria,
+    }));
+
+    const isInitialGeneration = !currentBuild;
+    const mode = isInitialGeneration ? "GERAÇÃO INICIAL" : "EDIÇÃO DE BUILD";
+
+    const systemInstruction = `Você é CodeTuga, um especialista em montagem de PCs. Sua tarefa agora é construir ou modificar uma build.
+**Modo Atual:** ${mode}
+
+**Sua Missão:**
+1.  **Analisar e Atualizar:** Analise a mensagem do usuário e as \`currentPreferencias\`. Atualize o objeto \`PreferenciaUsuarioInput\` se necessário.
+2.  **Selecionar Componentes:** Com base nas preferências ATUALIZADAS, selecione um conjunto COMPLETO e COMPATÍVEL da lista \`availableComponents\`.
+    -   **REGRA DE OURO:** Sempre selecione UM de cada categoria essencial: 'Processadores', 'Placas-Mãe', 'Memória RAM', 'SSD', 'Fonte', 'Gabinete'.
+    -   'Placa de Vídeo' é OBRIGATÓRIA, a menos que o CPU tenha vídeo integrado e o propósito não seja jogos/edição pesada.
+    -   'Cooler' é crucial para CPUs de alto desempenho ('K', 'X', i7/i9, R7/R9) ou climas quentes.
+    -   Se o usuário informou \`ownedComponents\`, você DEVE usar essas peças e NÃO selecionar novas para essas categorias. Garanta 100% de compatibilidade com as peças do usuário.
+3.  **Responder ao Usuário:** Elabore uma resposta amigável e informativa sobre a build gerada ou as modificações feitas.
+
+**Formato da Saída (JSON OBRIGATÓRIO):**
+\`\`\`json
+{
+  "aiResponseText": "Sua mensagem de confirmação ou resposta sobre a alteração.",
+  "updatedPreferencias": { /* O objeto PreferenciaUsuarioInput COMPLETO e ATUALIZADO */ },
+  "recommendedComponentIds": ["id_processador", "id_placa_mae", ...],
+  "justification": "Forneça um resumo geral sobre a build, seus pontos fortes e propósito. Se houver QUALQUER aviso de compatibilidade (ex: gargalo de CPU/GPU, TDP da fonte próximo do limite, etc.), liste-os CLARAMENTE sob um título 'Avisos de Compatibilidade:'. Ex: 'Visão Geral: ...\\n\\nAvisos de Compatibilidade:\\n- A fonte de 650W é suficiente, mas um upgrade para 750W é recomendado para futuras atualizações.'",
+  "estimatedTotalPrice": 1234.56
+}
+\`\`\`
+
+**Contexto Atual:**
+- Preferências do Usuário: ${JSON.stringify(currentPreferencias)}
+${currentBuild ? `- Build Atual para Edição: ${JSON.stringify(currentBuild.componentes.map(c => c.Produto))}` : ''}
+- Componentes Disponíveis: ${JSON.stringify(componentSummary, null, 2)}
+`;
+
+    try {
+        const userMessageForPrompt = userInput === 'GENERATE_INITIAL_BUILD'
+            ? "Gere a build inicial com base nas preferências fornecidas."
+            : `Última mensagem do usuário pedindo uma alteração: "${userInput}"`;
+
+        const contents: Content[] = [{ role: 'user', parts: [{ text: userMessageForPrompt }] }];
+
+        const result: GenerateContentResponse = await ai.models.generateContent({
+            model: TEXT_MODEL_NAME,
+            contents: contents,
+            config: {
+                systemInstruction: systemInstruction,
+                responseMimeType: "application/json",
+            },
+        });
+
+        const parsedResponse = parseJsonFromGeminiResponse<BuildResponse>(result.text);
+
+        if (!parsedResponse || !parsedResponse.aiResponseText || !parsedResponse.updatedPreferencias || !parsedResponse.recommendedComponentIds) {
+            console.error("Resposta da IA (Build) está malformada ou incompleta.", result.text);
+            return null;
+        }
+
+        // Sanitiza o orçamento, se necessário
+        const orcamentoAny = (parsedResponse.updatedPreferencias as any).orcamento;
+        if (orcamentoAny && typeof orcamentoAny === 'string') {
+            const cleanedString = orcamentoAny.replace(/\./g, '').replace(',', '.').replace(/[^0-9.]/g, '');
+            const numericOrcamento = parseFloat(cleanedString);
+            if (!isNaN(numericOrcamento)) {
+                parsedResponse.updatedPreferencias.orcamento = numericOrcamento;
+            } else {
+                delete parsedResponse.updatedPreferencias.orcamento;
+            }
+        }
+        
+        if (!parsedResponse.updatedPreferencias.perfilPC) parsedResponse.updatedPreferencias.perfilPC = {} as PerfilPCDetalhado;
+        if (!parsedResponse.updatedPreferencias.ambiente) parsedResponse.updatedPreferencias.ambiente = {} as Ambiente;
+        
+        return parsedResponse;
+
+    } catch (error) {
+        console.error("Erro ao chamar API Gemini (generateOrUpdateBuild):", error);
         const typedError = error as any;
         const isRateLimitError = (typedError?.error?.code === 429) || String(error).includes('429');
         
