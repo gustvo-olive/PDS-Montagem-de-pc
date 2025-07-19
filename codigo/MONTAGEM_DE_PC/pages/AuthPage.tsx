@@ -1,3 +1,9 @@
+/**
+ * @file Página de Autenticação (AuthPage).
+ * @module pages/AuthPage
+ * @description Este componente renderiza um formulário unificado para login e registro de usuários.
+ * O modo de operação ('login' ou 'register') é determinado por uma propriedade.
+ */
 
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
@@ -5,20 +11,41 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import Button from '../components/core/Button';
 import LoadingSpinner from '../components/core/LoadingSpinner';
 
+/**
+ * @interface AuthPageProps
+ * @description Propriedades para o componente AuthPage.
+ */
 interface AuthPageProps {
+  /**
+   * Determina se a página está em modo de login ou registro.
+   */
   mode: 'login' | 'register';
 }
 
+/**
+ * @component AuthPage
+ * @description Um componente de página que fornece uma UI para os usuários se autenticarem
+ * (login) ou criarem uma nova conta (registro). Ele utiliza o `AuthContext` para
+ * executar as operações de autenticação e lida com o estado do formulário e feedback de erro.
+ * @param {AuthPageProps} props - As propriedades do componente, definindo o modo ('login' ou 'register').
+ * @returns {React.ReactElement} A página com o formulário de autenticação.
+ */
 const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
-  const [nome, setNome] = useState(''); // Alterado de name para nome
+  const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+
   const { login, register, isLoading } = useAuth();
-  // const navigate = useNavigate(); // Não é mais necessário aqui, AuthContext cuida da navegação
   const location = useLocation(); 
 
+  /**
+   * Manipula o envio do formulário de autenticação.
+   * Chama a função `login` ou `register` do `AuthContext` com base no modo da página.
+   * @param {React.FormEvent} e - O evento de envio do formulário.
+   * @private
+   */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -33,13 +60,13 @@ const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
         return;
       }
       try {
-        await register(nome, email, password); // Passa nome, email, password
+        await register(nome, email, password);
       } catch (err: any) {
         setError(err.message || 'Falha ao registrar. Tente novamente.');
       }
-    } else { // Login
+    } else {
       try {
-        await login(email, password); // Passa email, password
+        await login(email, password);
       } catch (err: any) {
         setError(err.message || 'Falha ao fazer login. Verifique suas credenciais.');
       }
@@ -62,15 +89,15 @@ const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
               <div>
                 <label htmlFor="nome" className="sr-only">Nome</label> 
                 <input
-                  id="nome" // Alterado de name para nome
-                  name="nome" // Alterado de name para nome
+                  id="nome"
+                  name="nome"
                   type="text"
                   autoComplete="name"
                   required
                   className="appearance-none rounded-none relative block w-full px-3 py-3 border border-neutral-dark bg-primary placeholder-neutral-dark text-neutral rounded-t-md focus:outline-none focus:ring-accent focus:border-accent focus:z-10 sm:text-sm"
                   placeholder="Nome Completo"
-                  value={nome} // Alterado de name para nome
-                  onChange={(e) => setNome(e.target.value)} // Alterado de setName para setNome
+                  value={nome}
+                  onChange={(e) => setNome(e.target.value)}
                 />
               </div>
             </div>
@@ -94,7 +121,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
             <div>
               <label htmlFor="password_login" className="sr-only">Senha</label>
               <input
-                id="password_login" // Mantido id para consistência de CSS se houver
+                id="password_login"
                 name="password"
                 type="password"
                 autoComplete={mode === 'login' ? "current-password" : "new-password"}

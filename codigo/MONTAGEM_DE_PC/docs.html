@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Documentação - CodeTugaBuilds</title>
     <style>
+        /* Define as variáveis de cor para uso em todo o documento. */
         :root {
             --dark-blue: #0D1B2A;
             --light-dark-blue: #1B263B;
@@ -14,6 +15,7 @@
         }
 
         html {
+            /* Habilita a rolagem suave ao clicar em links de âncora. */
             scroll-behavior: smooth;
         }
 
@@ -24,18 +26,20 @@
             padding: 0;
             background-color: var(--dark-blue);
             color: var(--light-gray);
+            /* Usa flexbox para o layout principal (sidebar + conteúdo). */
             display: flex;
         }
 
+        /* Estilos da barra lateral de navegação. */
         .sidebar {
             width: 280px;
             background-color: var(--light-dark-blue);
             height: 100vh;
-            position: fixed;
+            position: fixed; /* Mantém a sidebar visível durante a rolagem. */
             top: 0;
             left: 0;
             padding: 20px;
-            overflow-y: auto;
+            overflow-y: auto; /* Adiciona rolagem se o conteúdo for muito grande. */
             border-right: 2px solid var(--muted-blue);
         }
         
@@ -63,14 +67,15 @@
         }
 
         .sidebar li a:hover,
-        .sidebar li a.active {
+        .sidebar li a.active { /* Estilo para o link ativo. */
             background-color: var(--cyan-accent);
             color: var(--dark-blue);
             font-weight: 500;
         }
 
+        /* Estilos do conteúdo principal. */
         .main-content {
-            margin-left: 280px; /* Same as sidebar width */
+            margin-left: 280px; /* Deixa espaço para a sidebar fixa. */
             padding: 20px 40px;
             width: calc(100% - 280px);
         }
@@ -90,6 +95,7 @@
         }
 
         section {
+             /* Truque para ajustar o offset da rolagem devido ao cabeçalho fixo (se houvesse). */
              padding-top: 60px;
              margin-top: -40px;
         }
@@ -177,13 +183,13 @@
             text-decoration: underline;
         }
         
-        /* Responsive Design */
+        /* Design Responsivo para telas menores. */
         @media (max-width: 900px) {
             body {
                 flex-direction: column;
             }
             .sidebar {
-                position: relative;
+                position: relative; /* Remove o posicionamento fixo. */
                 width: 100%;
                 height: auto;
                 border-right: none;
@@ -201,6 +207,7 @@
         }
 
     </style>
+    <!-- Carrega a fonte 'Inter' do Google Fonts. -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -416,25 +423,31 @@
     </main>
 
     <script>
+        // Este script é executado quando o conteúdo da página é carregado.
         document.addEventListener('DOMContentLoaded', () => {
             const sections = document.querySelectorAll('section');
             const navLinks = document.querySelectorAll('.sidebar nav ul li a');
 
             if (sections.length === 0 || navLinks.length === 0) return;
 
+            // Função para destacar o link de navegação da seção visível na tela.
             const activateLink = () => {
                 let index = sections.length;
 
+                // Percorre as seções de baixo para cima para encontrar a última que está visível.
                 while(--index && window.scrollY + 80 < sections[index].offsetTop) {}
                 
+                // Remove a classe 'active' de todos os links.
                 navLinks.forEach((link) => link.classList.remove('active'));
+                
+                // Adiciona a classe 'active' ao link correspondente à seção visível.
                 if(navLinks[index]) {
                    navLinks[index].classList.add('active');
                 }
             };
             
-            activateLink(); // Run on load
-            window.addEventListener('scroll', activateLink);
+            activateLink(); // Executa na carga inicial.
+            window.addEventListener('scroll', activateLink); // Executa a cada evento de rolagem.
         });
     </script>
 </body>

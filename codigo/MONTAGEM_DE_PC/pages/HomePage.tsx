@@ -1,8 +1,22 @@
+/**
+ * @file Página Inicial (HomePage).
+ * @module pages/HomePage
+ * @description Este componente renderiza a página de destino (landing page) da aplicação.
+ * Ele apresenta o propósito do CodeTugaBuilds, destaca seus principais recursos e
+ * fornece uma chamada à ação (CTA) principal para iniciar o processo de montagem.
+ */
 
 import React from 'react';
 import { Link } from 'react-router-dom';
 import Button from '../components/core/Button';
 
+/**
+ * @component HomePage
+ * @description A página inicial da aplicação. Serve como uma vitrine para
+ * os recursos do montador de PCs inteligente e convida o usuário a iniciar
+ * uma nova montagem com a ajuda da IA.
+ * @returns {React.ReactElement} A página de destino da aplicação.
+ */
 const HomePage: React.FC = () => {
   return (
     <div className="flex flex-col items-center justify-center text-center py-12">

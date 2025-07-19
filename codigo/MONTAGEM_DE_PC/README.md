@@ -1,5 +1,3 @@
-# Execute e faça deploy do seu app AI Studio
-
 Este guia contém tudo o que você precisa para rodar seu app localmente.
 
 ## Executar localmente
@@ -16,6 +14,7 @@ Antes de instalar as dependências, navegue até a raiz do projeto na pasta. Abr
    npm install --save-dev @types/react @types/react-dom
    npm install vite --save-dev
    npm install jspdf
+   npm install react-hot-toast
    ```
    # (Opcional) Corrija automaticamente vulnerabilidades encontradas nas dependências:
    npm audit fix --force

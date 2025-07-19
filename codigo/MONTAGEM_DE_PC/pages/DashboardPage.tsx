@@ -1,3 +1,10 @@
+/**
+ * @file Página do Painel do Usuário (DashboardPage).
+ * @module pages/DashboardPage
+ * @description Esta é uma rota protegida que serve como o painel principal para usuários autenticados.
+ * Ela exibe uma saudação, ações rápidas e uma lista de todas as builds de PC que o usuário salvou.
+ */
+
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -5,8 +12,16 @@ import { Build, Componente, PreferenciaUsuarioInput } from '../types';
 import Button from '../components/core/Button';
 import LoadingSpinner from '../components/core/LoadingSpinner';
 import { supabase } from '../services/supabaseClient';
-import { getComponents } from '../services/componentService';
+import toast from 'react-hot-toast';
 
+/**
+ * @component SavedBuildCard
+ * @description Um card de UI que exibe um resumo de uma build salva e fornece
+ * ações como "Ver/Editar" e "Excluir".
+ * @param {{ build: Build; onDelete: (buildId: string) => void }} props - As propriedades do componente.
+ * @private
+ * @returns {React.ReactElement} Um card representando uma build salva.
+ */
 const SavedBuildCard: React.FC<{ build: Build; onDelete: (buildId: string) => void }> = ({ build, onDelete }) => {
   return (
     <div className="bg-primary p-6 rounded-lg shadow-lg hover:shadow-xl transition-shadow duration-300 flex flex-col">
@@ -18,7 +33,7 @@ const SavedBuildCard: React.FC<{ build: Build; onDelete: (buildId: string) => vo
       </div>
       <div className="flex space-x-2 mt-auto">
         <Link to={`/build/${build.id}`}> 
-          <Button size="sm" variant="ghost">Visualizar</Button>
+          <Button size="sm" variant="ghost">Ver/Editar</Button>
         </Link>
         <Button size="sm" variant="danger" onClick={() => onDelete(build.id)}>Excluir</Button>
       </div>
@@ -26,44 +41,65 @@ const SavedBuildCard: React.FC<{ build: Build; onDelete: (buildId: string) => vo
   );
 };
 
+/**
+ * @component DashboardPage
+ * @description A página de painel do usuário. Busca e exibe as builds salvas
+ * do usuário a partir do Supabase e permite que ele as gerencie (visualize, edite ou exclua).
+ * Esta é uma rota protegida e só é acessível para usuários autenticados.
+ * @returns {React.ReactElement} A página do painel do usuário.
+ */
 const DashboardPage: React.FC = () => {
   const { currentUser } = useAuth();
   const [savedBuilds, setSavedBuilds] = useState<Build[]>([]);
   const [isLoadingBuilds, setIsLoadingBuilds] = useState(true);
 
+  /**
+   * Busca as builds salvas do usuário logado no Supabase.
+   * Utiliza uma consulta relacional para buscar as builds e todos os detalhes
+   * de seus componentes de forma eficiente em uma única chamada.
+   * @private
+   */
   const fetchBuilds = useCallback(async () => {
     if (!currentUser) return;
 
     setIsLoadingBuilds(true);
     
-    const allComponents = await getComponents();
-    if (allComponents.length === 0) {
-      console.error("Failed to load components from CSV for dashboard.");
-      alert("Não foi possível carregar os dados dos componentes.");
-      setIsLoadingBuilds(false);
-      return;
-    }
-    const componentMap = new Map(allComponents.map(c => [c.id, c]));
-
-    const { data, error } = await supabase
+    // To work around the "Type instantiation is excessively deep" error, we avoid
+    // direct destructuring. Instead, we assign the result to a variable explicitly
+    // typed as `any` to halt TypeScript's problematic deep type inference.
+    const response: any = await supabase
       .from('builds')
       .select(`
-        *,
-        build_components(
-          component_id
+        id,
+        nome,
+        orcamento,
+        data_criacao,
+        requisitos,
+        avisos_compatibilidade,
+        user_id,
+        build_components (
+          components (*)
         )
       `)
       .eq('user_id', currentUser.id)
       .order('data_criacao', { ascending: false });
 
+    const { data, error } = response;
+
     if (error) {
-      console.error("Error fetching builds:", error);
-      alert(`Não foi possível carregar suas builds: ${error.message}`);
+      toast.error(`Não foi possível carregar suas builds: ${error.message}`);
     } else if (data) {
-       const formattedBuilds: Build[] = data.map(build => {
-        // @ts-ignore
-        const components = build.build_components.map(bc => componentMap.get(String(bc.component_id))).filter(Boolean) as Componente[];
+       const formattedBuilds: Build[] = data.map((build: any) => {
+        // Mapeia a estrutura aninhada retornada pelo Supabase para nosso tipo `Build`.
+        const components: Componente[] = build.build_components
+            .map((bc: any) => bc.components)
+            .filter(Boolean) as Componente[];
         
+        const warnings = build.avisos_compatibilidade || [];
+        const justificationFromDb = warnings.length > 0
+            ? `Avisos de Compatibilidade:\n${warnings.map((w: string) => `- ${w}`).join('\n')}`
+            : undefined;
+
         return {
           id: build.id,
           nome: build.nome,
@@ -72,7 +108,8 @@ const DashboardPage: React.FC = () => {
           orcamento: build.orcamento,
           dataCriacao: build.data_criacao,
           requisitos: build.requisitos as PreferenciaUsuarioInput | undefined,
-          avisosCompatibilidade: build.avisos_compatibilidade || [],
+          justificativa: justificationFromDb,
+          avisos_compatibilidade: warnings,
         };
       });
       setSavedBuilds(formattedBuilds);
@@ -84,25 +121,34 @@ const DashboardPage: React.FC = () => {
     fetchBuilds();
   }, [fetchBuilds]);
 
+  /**
+   * Deleta uma build do banco de dados após a confirmação do usuário.
+   * Utiliza uma chamada RPC para garantir que a exclusão em cascata seja tratada corretamente
+   * pelas políticas de segurança do Supabase.
+   * @param {string} buildId - O ID da build a ser excluída.
+   * @private
+   */
   const handleDeleteBuild = async (buildId: string) => {
     if (!currentUser) return;
     if (!window.confirm("Tem certeza que deseja excluir esta build? Esta ação não pode ser desfeita.")) {
-        return;
+      return;
     }
-
-    const { error } = await supabase
-      .from('builds')
-      .delete()
-      .eq('id', buildId);
-
-    if (error) {
-        console.error("Error deleting build:", error);
-        alert(`Falha ao excluir a build: ${error.message}`);
-    } else {
-        setSavedBuilds(prevBuilds => prevBuilds.filter(b => b.id !== buildId));
-        alert("Build excluída com sucesso.");
+    
+    const toastId = toast.loading('Excluindo build...');
+    try {
+      const { error } = await supabase.rpc('delete_build', { p_build_id: buildId });
+  
+      if (error) throw error;
+  
+      setSavedBuilds(prevBuilds => prevBuilds.filter(b => b.id !== buildId));
+      toast.success("Build excluída com sucesso!", { id: toastId });
+      
+    } catch (error: any) {
+      toast.error(`Falha ao excluir a build: ${error.message}`, { id: toastId });
+      console.error("Erro ao excluir build:", error);
     }
   };
+
 
   if (!currentUser) {
     return <div className="text-center p-8"><p>Por favor, faça login para ver seu painel.</p></div>;

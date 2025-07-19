@@ -1,91 +1,107 @@
+/**
+ * @file Serviço de Dados Climáticos.
+ * @module services/weatherService
+ * @description Este módulo é responsável por buscar dados climáticos históricos
+ * de uma localização específica, utilizando a API Open-Meteo.
+ */
 
 import { CityWeatherData } from '../types';
 
-const OPEN_METEO_API_URL = 'https://api.open-meteo.com/v1/forecast';
+const OPEN_METEO_ARCHIVE_API_URL = 'https://archive-api.open-meteo.com/v1/archive';
 
-// WMO Weather interpretation codes
-// Reference: https://open-meteo.com/en/docs
-const getWeatherDescriptionFromCode = (code: number): string => {
-  const descriptions: Record<number, string> = {
-    0: 'Céu limpo',
-    1: 'Predominantemente limpo',
-    2: 'Parcialmente nublado',
-    3: 'Nublado',
-    45: 'Nevoeiro',
-    48: 'Nevoeiro depositando cristais de gelo',
-    51: 'Garoa leve',
-    53: 'Garoa moderada',
-    55: 'Garoa densa',
-    56: 'Garoa congelante leve',
-    57: 'Garoa congelante densa',
-    61: 'Chuva fraca',
-    63: 'Chuva moderada',
-    65: 'Chuva forte',
-    66: 'Chuva congelante leve',
-    67: 'Chuva congelante pesada',
-    71: 'Neve fraca',
-    73: 'Neve moderada',
-    75: 'Neve forte',
-    77: 'Grãos de neve',
-    80: 'Aguaceiros fracos',
-    81: 'Aguaceiros moderados',
-    82: 'Aguaceiros violentos',
-    85: 'Aguaceiros de neve fracos',
-    86: 'Aguaceiros de neve fortes',
-    95: 'Trovoada leve ou moderada',
-    96: 'Trovoada com granizo leve',
-    99: 'Trovoada com granizo forte',
-  };
-  return descriptions[code] || 'Condição desconhecida';
-};
-
-interface OpenMeteoResponse {
+/**
+ * @interface OpenMeteoArchiveResponse
+ * @description Interface para a estrutura da resposta da API Open-Meteo.
+ * @private
+ */
+interface OpenMeteoArchiveResponse {
   latitude: number;
   longitude: number;
-  current_weather: {
-    temperature: number;
-    weathercode: number;
-    windspeed: number;
-    time: string;
-  };
   daily: {
-    time: string[]; // Array of dates
-    weathercode: number[]; // Array of weather codes for each day
-    temperature_2m_max: number[]; // Array of max temperatures for each day
-    temperature_2m_min: number[]; // Array of min temperatures for each day
+    time: string[];
+    temperature_2m_max: (number | null)[];
+    temperature_2m_min: (number | null)[];
+    temperature_2m_mean: (number | null)[];
   };
 }
 
+/**
+ * Gera o intervalo de datas para o último ano a partir da data atual.
+ * @returns Um objeto com as datas de início e fim no formato "YYYY-MM-DD".
+ * @private
+ */
+const getPastYearDateRange = (): { startDate: string; endDate: string } => {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setFullYear(startDate.getFullYear() - 1);
+
+    const formatDate = (date: Date) => date.toISOString().split('T')[0];
+
+    return {
+        startDate: formatDate(startDate),
+        endDate: formatDate(endDate),
+    };
+};
+
+/**
+ * Busca os dados climáticos históricos de uma cidade com base em suas coordenadas.
+ * Utiliza a API Open-Meteo para obter as temperaturas média, máxima e mínima do último ano,
+ * que são usadas para otimizar as recomendações de refrigeração da IA.
+ * @param {string} latitude - A latitude da cidade.
+ * @param {string} longitude - A longitude da cidade.
+ * @returns {Promise<CityWeatherData | null>} Um objeto CityWeatherData ou nulo em caso de erro.
+ * @example
+ * ```ts
+ * const weatherData = await getCityWeather("-23.55", "-46.63");
+ * if (weatherData) {
+ *   console.log(`Temp. média anual: ${weatherData.avgTemp}°C`);
+ * }
+ * ```
+ */
 export const getCityWeather = async (latitude: string, longitude: string): Promise<CityWeatherData | null> => {
+  const { startDate, endDate } = getPastYearDateRange();
+  
   const queryParams = new URLSearchParams({
     latitude: latitude,
     longitude: longitude,
-    current_weather: 'true',
-    daily: 'weathercode,temperature_2m_max,temperature_2m_min',
-    timezone: 'auto', // Automatically determine timezone based on coordinates
-    forecast_days: '1', // We only need data for the current day
+    start_date: startDate,
+    end_date: endDate,
+    daily: 'temperature_2m_max,temperature_2m_min,temperature_2m_mean',
+    timezone: 'auto',
   });
 
   try {
-    const response = await fetch(`${OPEN_METEO_API_URL}?${queryParams.toString()}`);
+    const response = await fetch(`${OPEN_METEO_ARCHIVE_API_URL}?${queryParams.toString()}`);
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('Falha ao buscar dados da Open-Meteo:', response.status, errorData?.reason || response.statusText);
+      console.error('Falha ao buscar dados da Open-Meteo Archive API:', response.status, errorData?.reason || response.statusText);
       return null;
     }
 
-    const data: OpenMeteoResponse = await response.json();
+    const data: OpenMeteoArchiveResponse = await response.json();
 
-    if (!data.current_weather || !data.daily || !data.daily.weathercode || data.daily.weathercode.length === 0) {
-      console.error('Resposta da Open-Meteo incompleta:', data);
+    if (!data.daily || !data.daily.time || data.daily.time.length === 0) {
+      console.error('Resposta da Open-Meteo Archive API incompleta:', data);
       return null;
     }
     
+    const validMeans = data.daily.temperature_2m_mean.filter((t): t is number => t !== null);
+    const validMaxs = data.daily.temperature_2m_max.filter((t): t is number => t !== null);
+    const validMins = data.daily.temperature_2m_min.filter((t): t is number => t !== null);
+
+    if (validMeans.length === 0 || validMaxs.length === 0 || validMins.length === 0) {
+        console.error('Dados de temperatura anuais insuficientes.');
+        return null;
+    }
+    
+    const avgTemp = validMeans.reduce((sum, temp) => sum + temp, 0) / validMeans.length;
+    const maxTemp = Math.max(...validMaxs);
+    const minTemp = Math.min(...validMins);
+
     return {
-      avgTemp: Math.round(data.current_weather.temperature),
-      maxTemp: Math.round(data.daily.temperature_2m_max[0]),
-      minTemp: Math.round(data.daily.temperature_2m_min[0]),
-      description: getWeatherDescriptionFromCode(data.current_weather.weathercode),
+      avgTemp: Math.round(avgTemp),
+      maxTemp: Math.round(maxTemp),
+      minTemp: Math.round(minTemp),
     };
 
   } catch (error) {

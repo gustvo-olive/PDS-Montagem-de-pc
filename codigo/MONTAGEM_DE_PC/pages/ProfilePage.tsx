@@ -1,10 +1,24 @@
+/**
+ * @file Página de Perfil do Usuário (ProfilePage).
+ * @module pages/ProfilePage
+ * @description Uma rota protegida onde os usuários autenticados podem visualizar e
+ * editar suas informações de perfil, como nome, email e senha.
+ */
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import Button from '../components/core/Button';
 import { useNavigate } from 'react-router-dom';
 import LoadingSpinner from '../components/core/LoadingSpinner';
+import toast from 'react-hot-toast';
 
+/**
+ * @component ProfilePage
+ * @description Permite que o usuário autenticado veja e atualize suas informações de perfil.
+ * A página possui um modo de visualização e um modo de edição. As atualizações são
+ * processadas através da função `updateUser` do `AuthContext`.
+ * @returns {React.ReactElement} A página de perfil do usuário.
+ */
 const ProfilePage: React.FC = () => {
   const { currentUser, logout, updateUser, isLoading: authIsLoading } = useAuth();
   const navigate = useNavigate();
@@ -20,6 +34,7 @@ const ProfilePage: React.FC = () => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
+  // Efeito para popular o formulário com os dados do usuário atual.
   useEffect(() => {
     if (currentUser) {
       setFormData({
@@ -31,31 +46,39 @@ const ProfilePage: React.FC = () => {
     }
   }, [currentUser]);
 
-  if (authIsLoading) {
+  // Efeito para redirecionar o usuário se ele não estiver autenticado.
+  useEffect(() => {
+    if (!authIsLoading && !currentUser) {
+      navigate('/login');
+    }
+  }, [authIsLoading, currentUser, navigate]);
+
+  if (authIsLoading || !currentUser) {
     return <div className="flex justify-center p-10"><LoadingSpinner text="Carregando perfil..." /></div>;
   }
-  
-  if (!currentUser) {
-    // This case should ideally be handled by ProtectedRoute, but as a fallback:
-    navigate('/login');
-    return null;
-  }
 
+  /**
+   * Realiza o logout do usuário e o redireciona para a página inicial.
+   * @private
+   */
   const handleLogout = async () => {
     try {
       await logout();
       navigate('/');
     } catch (e: any) {
-        alert(`Falha ao sair: ${e.message}`);
+        toast.error(`Falha ao sair: ${e.message}`);
     }
   };
   
+  /**
+   * Alterna entre o modo de visualização e o modo de edição do formulário.
+   * @private
+   */
   const handleEditToggle = () => {
     setIsEditing(!isEditing);
     setError('');
     setSuccess('');
-    // Reset form to current user data when cancelling
-    if (isEditing) {
+    if (isEditing && currentUser) {
         setFormData({
             nome: currentUser.nome,
             email: currentUser.email,
@@ -65,10 +88,21 @@ const ProfilePage: React.FC = () => {
     }
   };
 
+  /**
+   * Atualiza o estado do formulário conforme o usuário digita nos inputs.
+   * @param {React.ChangeEvent<HTMLInputElement>} e - O evento de mudança.
+   * @private
+   */
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData(prev => ({...prev, [e.target.name]: e.target.value}));
   };
 
+  /**
+   * Lida com o envio do formulário de atualização de perfil.
+   * Valida os dados e chama a função `updateUser` do `AuthContext`.
+   * @param {React.FormEvent} e - O evento de envio do formulário.
+   * @private
+   */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -84,8 +118,8 @@ const ProfilePage: React.FC = () => {
     }
 
     const updates: { nome?: string; email?: string; password?: string } = {};
-    if (formData.nome.trim() !== currentUser.nome) updates.nome = formData.nome.trim();
-    if (formData.email.trim() !== currentUser.email) updates.email = formData.email.trim();
+    if (currentUser && formData.nome.trim() !== currentUser.nome) updates.nome = formData.nome.trim();
+    if (currentUser && formData.email.trim() !== currentUser.email) updates.email = formData.email.trim();
     if (formData.newPassword) updates.password = formData.newPassword;
     
     if (Object.keys(updates).length === 0) {
@@ -123,27 +157,13 @@ const ProfilePage: React.FC = () => {
       <form onSubmit={handleSubmit} className="space-y-6">
         <div>
           <label htmlFor="nome" className="block text-sm font-medium text-neutral-dark mb-1">Nome</label>
-          <input
-            id="nome"
-            name="nome"
-            type="text"
-            value={formData.nome}
-            onChange={handleChange}
-            disabled={!isEditing || isUpdating}
-            className="mt-1 text-lg text-neutral p-4 bg-primary rounded-lg shadow-sm w-full disabled:opacity-70 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-accent"
-          />
+          <input id="nome" name="nome" type="text" value={formData.nome} onChange={handleChange} disabled={!isEditing || isUpdating}
+            className="mt-1 text-lg text-neutral p-4 bg-primary rounded-lg shadow-sm w-full disabled:opacity-70 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-accent" />
         </div>
         <div>
           <label htmlFor="email" className="block text-sm font-medium text-neutral-dark mb-1">Email</label>
-          <input
-            id="email"
-            name="email"
-            type="email"
-            value={formData.email}
-            onChange={handleChange}
-            disabled={true} // Email change should be handled with care (e.g., re-verification)
-            className="mt-1 text-lg text-neutral p-4 bg-primary rounded-lg shadow-sm w-full disabled:opacity-50 disabled:cursor-not-allowed"
-            title="A alteração de e-mail está desabilitada."
+          <input id="email" name="email" type="email" value={formData.email} onChange={handleChange} disabled={!isEditing || isUpdating}
+            className="mt-1 text-lg text-neutral p-4 bg-primary rounded-lg shadow-sm w-full disabled:opacity-70 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-accent"
           />
         </div>
         
@@ -153,29 +173,13 @@ const ProfilePage: React.FC = () => {
             <div className="space-y-4">
                <div>
                 <label htmlFor="newPassword" className="block text-sm font-medium text-neutral-dark mb-1">Nova Senha (deixe em branco para não alterar)</label>
-                <input
-                    id="newPassword"
-                    name="newPassword"
-                    type="password"
-                    value={formData.newPassword}
-                    onChange={handleChange}
-                    disabled={isUpdating}
-                    placeholder="••••••••"
-                    className="mt-1 text-lg text-neutral p-4 bg-primary rounded-lg shadow-sm w-full disabled:opacity-70 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-accent"
-                />
+                <input id="newPassword" name="newPassword" type="password" value={formData.newPassword} onChange={handleChange} disabled={isUpdating} placeholder="••••••••"
+                    className="mt-1 text-lg text-neutral p-4 bg-primary rounded-lg shadow-sm w-full disabled:opacity-70 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-accent" />
                </div>
                <div>
                 <label htmlFor="confirmPassword" className="block text-sm font-medium text-neutral-dark mb-1">Confirmar Nova Senha</label>
-                <input
-                    id="confirmPassword"
-                    name="confirmPassword"
-                    type="password"
-                    value={formData.confirmPassword}
-                    onChange={handleChange}
-                    disabled={isUpdating}
-                    placeholder="••••••••"
-                    className="mt-1 text-lg text-neutral p-4 bg-primary rounded-lg shadow-sm w-full disabled:opacity-70 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-accent"
-                />
+                <input id="confirmPassword" name="confirmPassword" type="password" value={formData.confirmPassword} onChange={handleChange} disabled={isUpdating} placeholder="••••••••"
+                    className="mt-1 text-lg text-neutral p-4 bg-primary rounded-lg shadow-sm w-full disabled:opacity-70 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-accent" />
                </div>
             </div>
           </div>

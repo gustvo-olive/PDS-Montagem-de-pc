@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
   <head>
-    <meta charset="UTF--8" />
+    <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CodeTugaBuilds</title>
+    <!-- Carrega o TailwindCSS via CDN para estilização rápida -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
+      // Configuração personalizada do tema do TailwindCSS
       tailwind.config = {
         theme: {
           extend: {
@@ -23,16 +25,18 @@
         }
       }
     </script>
+    <!-- Carrega a fonte 'Inter' do Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+      /* Estilos globais e para a barra de rolagem */
       body {
         font-family: 'Inter', sans-serif;
         background-color: #0D1B2A; /* primary color */
         color: #E0E1DD; /* neutral color */
       }
-      /* Scrollbar styling */
+      /* Estilização da barra de rolagem para navegadores baseados em WebKit */
       ::-webkit-scrollbar {
         width: 8px;
         height: 8px;
@@ -48,6 +52,12 @@
         background: #34d3c3; /* slightly darker accent */
       }
     </style>
+  <!--
+    Import Map: Define como o navegador deve resolver os importadores de módulos ES6.
+    Isso permite usar nomes de pacotes (ex: 'react') diretamente no código,
+    e o navegador os buscará das URLs especificadas (via esm.sh),
+    eliminando a necessidade de um bundler como Webpack em desenvolvimento.
+  -->
   <script type="importmap">
 {
   "imports": {
@@ -58,15 +68,19 @@
     "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
     "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@^2.44.4",
     "jspdf": "https://esm.sh/jspdf@^2.5.1",
-    "jspdf-autotable": "https://esm.sh/jspdf-autotable@^3.8.2"
+    "jspdf-autotable": "https://esm.sh/jspdf-autotable@^3.8.2",
+    "react-hot-toast": "https://esm.sh/react-hot-toast@^2.4.1"
   }
 }
 </script>
 <link rel="stylesheet" href="/index.css">
 </head>
   <body>
+    <!-- Fallback para usuários com JavaScript desabilitado -->
     <noscript>You need to enable JavaScript to run this app.</noscript>
+    <!-- Ponto de entrada para a aplicação React -->
     <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
-</body>
+    <!-- Carrega o script principal da aplicação como um módulo ES6 -->
+    <script type="module" src="/index.tsx"></script>
+  </body>
 </html>

@@ -1,13 +1,30 @@
+/**
+ * @file Componente Navbar.
+ * @module components/layout/Navbar
+ * @description Barra de navegação superior da aplicação, que exibe links diferentes
+ * com base no estado de autenticação do usuário.
+ */
 
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import Button from '../core/Button';
 
+/**
+ * @component Navbar
+ * @description Componente da barra de navegação superior. Ele consome o `AuthContext`
+ * para exibir dinamicamente links de navegação para usuários logados (Painel, Sair)
+ * ou para visitantes (Login, Cadastrar).
+ * @returns {React.ReactElement} O elemento da barra de navegação.
+ */
 const Navbar: React.FC = () => {
   const { currentUser, logout, isLoading } = useAuth();
   const navigate = useNavigate();
 
+  /**
+   * Manipula o evento de clique no botão de logout.
+   * @private
+   */
   const handleLogout = () => {
     logout();
     navigate('/');
@@ -30,7 +47,7 @@ const Navbar: React.FC = () => {
               <Link to="/build" state={{ newBuild: true }} className="text-neutral hover:text-accent transition-colors px-3 py-2 rounded-md text-sm font-medium">
                 Nova Montagem
               </Link>
-              <span className="text-neutral-dark text-sm hidden md:block">Olá, {currentUser.nome}!</span> {/* Alterado para currentUser.nome */}
+              <span className="text-neutral-dark text-sm hidden md:block">Olá, {currentUser.nome}!</span>
               <Button onClick={handleLogout} variant="ghost" size="sm">
                 Sair
               </Button>

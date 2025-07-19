@@ -1,14 +1,61 @@
+/**
+ * @file Componente Button.
+ * @module components/core/Button
+ * @description Um componente de botão altamente reutilizável com variantes de estilo,
+ * tamanhos, estado de carregamento e suporte a ícones.
+ */
 
 import React from 'react';
 
+/**
+ * @interface ButtonProps
+ * @description Propriedades para o componente Button. Estende as propriedades padrão de um botão HTML.
+ */
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  /**
+   * Estilos visuais do botão.
+   * @default 'primary'
+   */
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
+  /**
+   * Tamanho do botão.
+   * @default 'md'
+   */
   size?: 'sm' | 'md' | 'lg';
+  /**
+   * Se `true`, exibe um spinner de carregamento e desabilita o botão.
+   * @default false
+   */
   isLoading?: boolean;
+  /**
+   * Ícone React a ser exibido à esquerda do texto do botão.
+   */
   leftIcon?: React.ReactNode;
+  /**
+   * Ícone React a ser exibido à direita do texto do botão.
+   */
   rightIcon?: React.ReactNode;
 }
 
+/**
+ * @component Button
+ * @description Um componente de botão versátil que encapsula estilos e comportamentos comuns,
+ * como estados de carregamento e variantes visuais.
+ * @param {ButtonProps} props - Propriedades para configurar o botão, incluindo `variant`, `size`, `isLoading`, ícones e outras propriedades HTML de botão.
+ * @returns {React.ReactElement} O elemento do botão.
+ * @example
+ * ```tsx
+ * <Button
+ *   variant="primary"
+ *   size="lg"
+ *   isLoading={isSubmitting}
+ *   onClick={handleSubmit}
+ *   leftIcon={<CheckIcon />}
+ * >
+ *   Confirmar
+ * </Button>
+ * ```
+ */
 const Button: React.FC<ButtonProps> = ({
   children,
   variant = 'primary',
@@ -60,4 +107,3 @@ const Button: React.FC<ButtonProps> = ({
 };
 
 export default Button;
-    
